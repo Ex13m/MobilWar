@@ -2,7 +2,8 @@ import { GAME, resolveShot, type ObjectKind, type PlayMode, type ServerMsg } fro
 import { ArScene } from "./ar/scene.js";
 import { CameraFeed } from "./ar/camera-feed.js";
 import { GameAudio } from "./audio.js";
-import type { Net } from "./net.js";
+import { Net } from "./net.js";
+import { wsUrlFor } from "./api.js";
 import { Screenless } from "./screenless.js";
 import type { Sensors } from "./sensors.js";
 import { WorldState } from "./state.js";
@@ -11,7 +12,6 @@ import type { Profile } from "./storage.js";
 
 export interface GameOptions {
   root: HTMLElement;
-  net: Net;
   sensors: Sensors;
   audio: GameAudio;
   profile: Profile;
@@ -40,14 +40,18 @@ export class Game {
   private joined = false;
   private dead = false;
 
-  constructor(private o: GameOptions) {}
+  private net: Net;
+
+  constructor(private o: GameOptions) {
+    this.net = new Net(wsUrlFor(o.roomId));
+  }
 
   async start(): Promise<void> {
-    const { root, net, o } = { root: this.o.root, net: this.o.net, o: this.o };
+    const { root, net, o } = { root: this.o.root, net: this.net, o: this.o };
     root.innerHTML = "";
     this.offNet = net.on((m) => this.onMsg(m));
     net.onOpen = () => this.join();
-    if (net.connected) this.join();
+    net.connect();
 
     if (o.playMode === "ar") {
       root.insertAdjacentHTML("beforeend", `<video id="video" autoplay playsinline muted></video><canvas id="gl"></canvas>`);
@@ -147,13 +151,13 @@ export class Game {
 
   private join(): void {
     const { profile, roomId, playMode } = this.o;
-    this.o.net.send({ type: "join", roomId, nick: profile.nick, avatar: profile.avatar, playMode, deviceId: profile.deviceId });
+    this.net.send({ type: "join", roomId, nick: profile.nick, avatar: profile.avatar, playMode, deviceId: profile.deviceId });
   }
 
   private sendPos(): void {
     const fix = this.o.sensors.fix;
     if (!fix || !this.joined) return;
-    this.o.net.send({ type: "pos", lat: fix.lat, lon: fix.lon, acc: fix.acc, heading: this.o.sensors.orient.heading, ct: performance.now() });
+    this.net.send({ type: "pos", lat: fix.lat, lon: fix.lon, acc: fix.acc, heading: this.o.sensors.orient.heading, ct: performance.now() });
   }
 
   private fire(): void {
@@ -163,13 +167,13 @@ export class Game {
     this.lastShotAt = now;
     const heading = this.o.sensors.orient.heading;
     this.o.audio.shot();
-    this.o.net.send({ type: "shoot", heading, pitch: this.o.sensors.orient.pitch, ct: now });
+    this.net.send({ type: "shoot", heading, pitch: this.o.sensors.orient.pitch, ct: now });
     // Immediate local tracer for responsiveness; server decides the hit.
     this.scene?.tracer(this.world.me.x, this.world.me.z, heading, GAME.RIFLE_RANGE_M, 0xfde047, now);
   }
 
   private place(kind: ObjectKind): void {
-    this.o.net.send({ type: "place", kind });
+    this.net.send({ type: "place", kind });
   }
 
   private onMsg(m: ServerMsg): void {
@@ -234,6 +238,10 @@ export class Game {
         }
         break;
       case "error":
+        if (m.code === "rejoin") {
+          this.join();
+          break;
+        }
         this.hud?.banner(m.text, "warn", 3000);
         if (m.code === "no_room" || m.code === "kicked" || m.code === "room_full") {
           alert(m.text);
@@ -265,7 +273,8 @@ export class Game {
 
   private frame(_t: number): void {
     const now = performance.now();
-    const { sensors, net, audio } = this.o;
+    const { sensors, audio } = this.o;
+    const net = this.net;
     const fix = sensors.fix;
     if (fix && fix.t !== this.lastFixSentT && this.world.room) {
       this.world.pushMyFix(fix.lat, fix.lon, fix.acc, fix.t);
@@ -334,6 +343,7 @@ export class Game {
     if (this.posTimer) clearInterval(this.posTimer);
     if (this.raf) cancelAnimationFrame(this.raf);
     this.offNet?.();
+    this.net.close();
     this.scene?.endXr();
     this.scene?.dispose();
     this.feed?.stop();

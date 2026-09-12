@@ -1,5 +1,5 @@
 import { AVATARS, GAME, type AvatarId, type GameMode, type PlayMode, type RoomInfo } from "@mobilwar/shared";
-import type { Net } from "../net.js";
+import { createRoom, listRooms } from "../api.js";
 import { saveProfile, type Profile } from "../storage.js";
 
 export interface LobbyResult {
@@ -25,7 +25,7 @@ export const MODE_NAMES: Record<GameMode, string> = {
 };
 
 /** Lobby: profile, room list (nearest first), create/join. Resolves when the player taps "Играть". */
-export function showLobby(root: HTMLElement, profile: Profile, net: Net, getFix: () => { lat: number; lon: number } | null): Promise<LobbyResult> {
+export function showLobby(root: HTMLElement, profile: Profile, getFix: () => { lat: number; lon: number } | null): Promise<LobbyResult> {
   return new Promise((resolve) => {
     const params = new URLSearchParams(location.search);
     const preRoom = (params.get("room") ?? profile.lastRoom ?? "").toUpperCase();
@@ -73,7 +73,6 @@ export function showLobby(root: HTMLElement, profile: Profile, net: Net, getFix:
 
     const $ = <T extends HTMLElement>(s: string) => root.querySelector(s) as T;
     const err = $("#err");
-    net.onStatus = (s) => ($("#netstat").textContent = s === "open" ? "Сервер на связи" : s === "connecting" ? "Подключение…" : "Нет связи с сервером, переподключаюсь…");
 
     $("#avatars").addEventListener("click", (e) => {
       const chip = (e.target as HTMLElement).closest<HTMLElement>(".chip");
@@ -123,22 +122,15 @@ export function showLobby(root: HTMLElement, profile: Profile, net: Net, getFix:
         err.textContent = "Нет GPS. Разреши геолокацию и выйди на улицу";
         return;
       }
-      const off = net.on((m) => {
-        if (m.type === "room_created") {
-          off();
-          go(m.room.id);
-        } else if (m.type === "error") {
-          off();
-          err.textContent = m.text;
-        }
-      });
-      net.send({
-        type: "create_room",
+      err.textContent = "";
+      createRoom({
         name: $<HTMLInputElement>("#rname").value.trim() || "Зона",
         mode: $<HTMLSelectElement>("#rmode").value as GameMode,
         origin: fix,
         radiusM: Number($<HTMLInputElement>("#rradius").value) || GAME.DEFAULT_ZONE_RADIUS_M,
-      });
+      })
+        .then((room) => go(room.id))
+        .catch((e: Error) => (err.textContent = `Не удалось создать зону: ${e.message}`));
     });
 
     const roomsEl = $("#rooms");
@@ -160,16 +152,16 @@ export function showLobby(root: HTMLElement, profile: Profile, net: Net, getFix:
       if (!el || !commitProfile()) return;
       go(el.dataset.id!);
     });
-    const offRooms = net.on((m) => {
-      if (m.type === "rooms") renderRooms(m.rooms);
-    });
-    const poll = () => net.send({ type: "list_rooms", near: getFix() ?? undefined });
+    const poll = () =>
+      listRooms(getFix())
+        .then((rooms) => {
+          $("#netstat").textContent = "Сервер на связи";
+          renderRooms(rooms);
+        })
+        .catch(() => ($("#netstat").textContent = "Нет связи с сервером…"));
     poll();
     const timer = setInterval(poll, 5000);
-    const cleanup = () => {
-      clearInterval(timer);
-      offRooms();
-    };
+    const cleanup = () => clearInterval(timer);
     // resolve wrapper cleanup
     const origResolve = resolve;
     resolve = ((v: LobbyResult) => {

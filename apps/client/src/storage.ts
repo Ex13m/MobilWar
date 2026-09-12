@@ -33,10 +33,3 @@ export function saveProfile(p: Profile): void {
 function defaults(): Profile {
   return { deviceId: uid("dev"), nick: "", avatar: "scout", playMode: "ar" };
 }
-
-export function wsUrl(): string {
-  const env = import.meta.env.VITE_WS_URL as string | undefined;
-  if (env) return env;
-  const proto = location.protocol === "https:" ? "wss" : "ws";
-  return `${proto}://${location.hostname}:8080`;
-}

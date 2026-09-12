@@ -1,8 +1,9 @@
 import L from "leaflet";
 import "leaflet/dist/leaflet.css";
-import { fromLocal, type GameMode, type LatLon, type PlayerPublic, type RoomInfo, type Snapshot, type WorldObject } from "@mobilwar/shared";
+import { fromLocal, type GameMode, type LatLon, type PlayerPublic, type RoomInfo, type ServerMsg, type Snapshot, type WorldObject } from "@mobilwar/shared";
 import { Net } from "./net.js";
-import { loadProfile, wsUrl } from "./storage.js";
+import { loadProfile } from "./storage.js";
+import { wsUrlFor } from "./api.js";
 import { MODE_NAMES, esc } from "./ui/lobby.js";
 
 /**
@@ -47,32 +48,36 @@ const objectMarkers = new Map<string, L.Marker>();
 let room: RoomInfo | null = null;
 let centered = false;
 
-const net = new Net(wsUrl());
-net.onStatus = (s) => ($("#status").textContent = s);
-net.onOpen = () => {
-  if (roomId) join();
-};
-net.connect();
-
-function join(): void {
-  net.send({ type: "join", roomId, nick: "Судья", avatar: "robot", playMode: "referee", deviceId: profile.deviceId + "_ref" });
+let net: Net | null = null;
+function connect(): void {
+  net?.close();
+  if (!roomId) return;
+  net = new Net(wsUrlFor(roomId));
+  net.onStatus = (s) => ($("#status").textContent = s);
+  net.onOpen = () => join();
+  net.on(onMsg);
+  net.connect();
 }
+function join(): void {
+  net?.send({ type: "join", roomId, nick: "Судья", avatar: "robot", playMode: "referee", deviceId: profile.deviceId + "_ref" });
+}
+if (roomId) connect();
 
 $("#connect").addEventListener("click", () => {
   roomId = $<HTMLInputElement>("#code").value.trim().toUpperCase();
   history.replaceState(null, "", `?room=${roomId}`);
-  join();
+  connect();
 });
-$("#start").addEventListener("click", () => net.send({ type: "ref", cmd: "start" }));
-$("#stop").addEventListener("click", () => net.send({ type: "ref", cmd: "stop" }));
-$("#reset").addEventListener("click", () => net.send({ type: "ref", cmd: "reset" }));
-$("#mode").addEventListener("change", () => net.send({ type: "ref", cmd: "set_mode", mode: $<HTMLSelectElement>("#mode").value as GameMode }));
+$("#start").addEventListener("click", () => net?.send({ type: "ref", cmd: "start" }));
+$("#stop").addEventListener("click", () => net?.send({ type: "ref", cmd: "stop" }));
+$("#reset").addEventListener("click", () => net?.send({ type: "ref", cmd: "reset" }));
+$("#mode").addEventListener("change", () => net?.send({ type: "ref", cmd: "set_mode", mode: $<HTMLSelectElement>("#mode").value as GameMode }));
 $("#zone").addEventListener("click", () => {
   const c = map.getCenter();
-  net.send({ type: "ref", cmd: "set_zone", origin: { lat: c.lat, lon: c.lng }, radiusM: Number($<HTMLInputElement>("#radius").value) || 150 });
+  net?.send({ type: "ref", cmd: "set_zone", origin: { lat: c.lat, lon: c.lng }, radiusM: Number($<HTMLInputElement>("#radius").value) || 150 });
 });
 
-net.on((m) => {
+function onMsg(m: ServerMsg): void {
   switch (m.type) {
     case "welcome":
       room = m.room;
@@ -90,10 +95,11 @@ net.on((m) => {
       log(`событие: ${m.kind}`);
       break;
     case "error":
-      log(`ошибка: ${m.text}`);
+      if (m.code === "rejoin") join();
+      else log(`ошибка: ${m.text}`);
       break;
   }
-});
+}
 
 let lastSnap: Snapshot | null = null;
 function name(id: string): string {
@@ -149,7 +155,7 @@ function render(s: Snapshot): void {
       .join("");
   $("#side").querySelectorAll<HTMLButtonElement>("[data-kick]").forEach((b) =>
     b.addEventListener("click", () => {
-      if (confirm("Исключить игрока?")) net.send({ type: "ref", cmd: "kick", playerId: b.dataset.kick });
+      if (confirm("Исключить игрока?")) net?.send({ type: "ref", cmd: "kick", playerId: b.dataset.kick });
     }),
   );
 }

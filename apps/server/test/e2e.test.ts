@@ -9,8 +9,8 @@ let port = 0;
 class C {
   ws: WebSocket;
   inbox: ServerMsg[] = [];
-  constructor() {
-    this.ws = new WebSocket(`ws://127.0.0.1:${port}`);
+  constructor(path = "") {
+    this.ws = new WebSocket(`ws://127.0.0.1:${port}${path}`);
     this.ws.on("message", (d) => this.inbox.push(JSON.parse(String(d))));
   }
   open() {
@@ -95,5 +95,24 @@ describe("e2e over WebSocket", () => {
     const top = app.db.topDevices(5);
     expect(top.find((d) => d.nick === "A")?.kills).toBe(1);
     for (const c of [a, b, ref]) c.ws.close();
+  });
+
+  it("HTTP create + join via /ws/<code> path", async () => {
+    const r = await fetch(`http://127.0.0.1:${port}/api/rooms`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ name: "HTTP", mode: "koth", origin, radiusM: 80 }),
+    });
+    expect(r.status).toBe(201);
+    const info = (await r.json()) as { id: string; mode: string };
+    expect(info.mode).toBe("koth");
+    const c = new C(`/ws/${info.id.toLowerCase()}`);
+    await c.open();
+    c.send({ type: "join", roomId: "", nick: "P", avatar: "ninja", playMode: "ar", deviceId: "dp" });
+    const w = await c.wait("welcome");
+    expect(w.room.id).toBe(info.id);
+    const list = (await fetch(`http://127.0.0.1:${port}/api/rooms?lat=${origin.lat}&lon=${origin.lon}`).then((x) => x.json())) as Array<{ id: string }>;
+    expect(list.some((x) => x.id === info.id)).toBe(true);
+    c.ws.close();
   });
 });

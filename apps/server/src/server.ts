@@ -18,6 +18,8 @@ import { RoomManager } from "./rooms.js";
 interface Conn extends Client {
   ws: WebSocket;
   room: Room | null;
+  /** Room code taken from the WS path /ws/<code>, if any. */
+  pathRoom: string;
   deviceId: string;
   posBucket: TokenBucket;
   shootBucket: TokenBucket;
@@ -49,6 +51,34 @@ export function createApp(opts: { dbPath?: string } = {}) {
       res.end(JSON.stringify({ ok: true, rooms: rooms.rooms.size, conns: conns.size, uptime: process.uptime() }));
       return;
     }
+    if (url.pathname === "/api/rooms" && req.method === "OPTIONS") {
+      res.writeHead(204, { "Access-Control-Allow-Methods": "GET,POST", "Access-Control-Allow-Headers": "content-type" });
+      res.end();
+      return;
+    }
+    if (url.pathname === "/api/rooms" && req.method === "POST") {
+      let body = "";
+      req.on("data", (c) => (body += c));
+      req.on("end", () => {
+        try {
+          const m = JSON.parse(body || "{}") as { name?: string; mode?: string; origin?: { lat: number; lon: number }; radiusM?: number };
+          if (!m.origin || !Number.isFinite(m.origin.lat) || !Number.isFinite(m.origin.lon)) throw new Error("bad_origin");
+          const room = rooms.create({
+            name: String(m.name ?? "Зона").slice(0, 32) || "Зона",
+            mode: (m.mode as import("@mobilwar/shared").GameMode) ?? "tdm",
+            origin: { lat: m.origin.lat, lon: m.origin.lon },
+            radiusM: Number(m.radiusM) || GAME.DEFAULT_ZONE_RADIUS_M,
+          });
+          log.info("room created (http)", room.id, room.name, room.mode);
+          res.writeHead(201, { "content-type": "application/json" });
+          res.end(JSON.stringify(room.info()));
+        } catch (e) {
+          res.writeHead(400, { "content-type": "application/json" });
+          res.end(JSON.stringify({ error: (e as Error).message }));
+        }
+      });
+      return;
+    }
     if (url.pathname === "/api/rooms") {
       const lat = Number(url.searchParams.get("lat"));
       const lon = Number(url.searchParams.get("lon"));
@@ -76,6 +106,7 @@ export function createApp(opts: { dbPath?: string } = {}) {
       id: uid("p"),
       ws,
       room: null,
+      pathRoom: (new URL(req.url ?? "/", "http://x").pathname.match(/^\/ws\/([A-Za-z0-9_-]{1,64})/)?.[1] ?? "").toUpperCase(),
       deviceId: "",
       posBucket: new TokenBucket(10, GAME.POS_HZ * 1.5),
       shootBucket: new TokenBucket(5, 1000 / GAME.RIFLE_COOLDOWN_MS),
@@ -140,7 +171,7 @@ export function createApp(opts: { dbPath?: string } = {}) {
         return;
       }
       case "join": {
-        const room = rooms.get(msg.roomId ?? "");
+        const room = rooms.get(msg.roomId || conn.pathRoom || "");
         if (!room) {
           conn.send({ type: "error", code: "no_room", text: "Комната не найдена" });
           return;

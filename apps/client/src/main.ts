@@ -1,13 +1,11 @@
 import { GameAudio } from "./audio.js";
 import { Game } from "./game.js";
-import { Net } from "./net.js";
 import { Sensors, isSecure } from "./sensors.js";
-import { loadProfile, wsUrl } from "./storage.js";
+import { loadProfile } from "./storage.js";
 import { showLobby } from "./ui/lobby.js";
 
 const root = document.getElementById("app")!;
 const profile = loadProfile();
-const net = new Net(wsUrl());
 const sensors = new Sensors();
 const audio = new GameAudio();
 
@@ -20,15 +18,13 @@ async function boot(): Promise<void> {
     root.innerHTML = `<div class="screen"><div class="card"><h2>Нужен HTTPS</h2><p class="sub">Камера, GPS и компас работают только по защищённому соединению.</p></div></div>`;
     return;
   }
-  net.connect();
   sensors.start(); // GPS starts asking permission immediately so the lobby can show nearby zones
   for (;;) {
-    const res = await showLobby(root, profile, net, () => (sensors.fix ? { lat: sensors.fix.lat, lon: sensors.fix.lon } : null));
+    const res = await showLobby(root, profile, () => (sensors.fix ? { lat: sensors.fix.lat, lon: sensors.fix.lon } : null));
     // Permission gate (must be a user gesture on iOS)
     await permissionGate();
     const game = new Game({
       root,
-      net,
       sensors,
       audio,
       profile,
