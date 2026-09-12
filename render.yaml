@@ -1,0 +1,24 @@
+# Render.com blueprint: one WS server (Docker) + static client.
+services:
+  - type: web
+    name: mobilwar-server
+    runtime: docker
+    dockerfilePath: ./apps/server/Dockerfile
+    plan: starter
+    envVars:
+      - key: REFEREE_PIN
+        generateValue: true
+      - key: ALLOWED_ORIGINS
+        value: https://mobilwar.onrender.com
+    disk:
+      name: data
+      mountPath: /data
+      sizeGB: 1
+  - type: web
+    name: mobilwar
+    runtime: static
+    buildCommand: corepack enable && pnpm install --frozen-lockfile && pnpm --filter @mobilwar/client build
+    staticPublishPath: apps/client/dist
+    envVars:
+      - key: VITE_WS_URL
+        value: wss://mobilwar-server.onrender.com
