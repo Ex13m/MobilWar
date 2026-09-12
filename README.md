@@ -36,7 +36,7 @@ pnpm dev              # сервер ws://<ip>:8080, клиент https://<ip>:5
 4. Остальные вводят код или выбирают зону из списка «рядом».
 5. Судья открывает `https://<ip>:5173/referee.html?room=КОД` на планшете и нажимает «Старт».
 
-Клиент берёт адрес сервера из `VITE_WS_URL` (см. `apps/client/.env.example`), по умолчанию — `ws(s)://<хост-страницы>:8080`.
+Клиент берёт адрес бэкенда из `VITE_API_URL` (см. `apps/client/.env.example`); по умолчанию в dev — `<хост-страницы>:8080`, в проде — тот же origin. Лобби ходит по HTTP (`/api/rooms`), игра — по WebSocket `/ws/<КОД>`.
 
 ## Проверки
 
@@ -49,6 +49,15 @@ pnpm build       # сборка сервера (tsc) и клиента (vite)
 CI (GitHub Actions) гоняет всё это на каждый push.
 
 ## Деплой
+
+Три варианта:
+
+| Вариант | Что нужно | Публичный доступ | Стоимость |
+|---|---|---|---|
+| **Cloudflare Workers через Higgsfield** (`deploy/higgsfield/`) | ничего, уже развёрнуто: https://mobilwar.higgsfield.app | нет: платформа требует вход в Higgsfield-аккаунт на каждом устройстве | 0 |
+| **Render** (`render.yaml`) | подключить GitHub-репо в Render → Blueprint | да | free (сервер засыпает) / ~7 $ |
+| **Свой VPS** (`docker-compose.yml`) | любой Linux с Docker + домен с HTTPS | да | от 3–5 $ |
+
 
 - **Сервер**: `apps/server/Dockerfile` (образ ~150 МБ, том `/data` для SQLite). `docker compose up` для локального запуска. `render.yaml` — blueprint для Render (сервер + статика). Переменные: `PORT`, `DB_PATH`, `ALLOWED_ORIGINS`, `REFEREE_PIN`.
 - **Клиент**: статика из `apps/client/dist` на любой CDN (Cloudflare Pages / Netlify / Render Static). Обязателен HTTPS.

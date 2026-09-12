@@ -20,5 +20,5 @@ services:
     buildCommand: corepack enable && pnpm install --frozen-lockfile && pnpm --filter @mobilwar/client build
     staticPublishPath: apps/client/dist
     envVars:
-      - key: VITE_WS_URL
-        value: wss://mobilwar-server.onrender.com
+      - key: VITE_API_URL
+        value: https://mobilwar-server.onrender.com
