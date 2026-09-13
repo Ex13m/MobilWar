@@ -216,7 +216,12 @@ export function createApp(opts: { dbPath?: string } = {}) {
         if (!conn.shootBucket.take()) return;
         const p = room.players.get(conn.id);
         if (!p) return;
-        room.shoot(p, Number(msg.heading));
+        room.shoot(p, Number(msg.heading), msg.weapon);
+        return;
+      }
+      case "weapon": {
+        const p = conn.room?.players.get(conn.id);
+        if (p && conn.room) conn.room.selectWeapon(p, msg.weapon);
         return;
       }
       case "place": {

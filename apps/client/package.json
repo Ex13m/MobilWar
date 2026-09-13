@@ -13,6 +13,7 @@
   "dependencies": {
     "@mobilwar/shared": "workspace:*",
     "leaflet": "^1.9.4",
+    "postprocessing": "^6.39.5",
     "three": "^0.186.0"
   },
   "devDependencies": {

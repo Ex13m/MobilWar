@@ -4,6 +4,7 @@ import {
   toLocal,
   type LatLon,
   type PlayerPublic,
+  type Projectile,
   type RoomInfo,
   type Snapshot,
   type WorldObject,
@@ -34,9 +35,10 @@ export class WorldState {
   room: RoomInfo | null = null;
   players = new Map<string, RemotePlayer>();
   objects = new Map<string, WorldObject>();
+  projectiles = new Map<string, Projectile & { rx: number; rz: number }>();
   lastSnapT = 0;
   /** My filtered local position. */
-  me = { x: 0, z: 0, acc: 999, heading: 0, hp: GAME.MAX_HP as number, alive: true };
+  me = { x: 0, z: 0, acc: 999, heading: 0, hp: GAME.MAX_HP as number, alive: true, shield: 0, ammo: 0, respawnAt: 0, protectedUntil: 0, overchargeUntil: 0 };
   private posF = new PositionFilter();
 
   get origin(): LatLon | null {
@@ -60,11 +62,24 @@ export class WorldState {
       if (p.id === this.myId) {
         this.me.hp = p.hp;
         this.me.alive = p.alive;
+        this.me.shield = p.shield;
+        this.me.ammo = p.ammo;
+        this.me.respawnAt = p.respawnAt;
+        this.me.protectedUntil = p.protectedUntil;
+        this.me.overchargeUntil = p.overchargeUntil;
       }
     }
     for (const id of [...this.players.keys()]) if (!seen.has(id)) this.players.delete(id);
     this.objects.clear();
     for (const o of s.objects) this.objects.set(o.id, o);
+    const seenP = new Set<string>();
+    for (const pr of s.projectiles ?? []) {
+      seenP.add(pr.id);
+      const cur = this.projectiles.get(pr.id);
+      if (cur) Object.assign(cur, pr);
+      else this.projectiles.set(pr.id, { ...pr, rx: pr.x, rz: pr.z });
+    }
+    for (const id of [...this.projectiles.keys()]) if (!seenP.has(id)) this.projectiles.delete(id);
   }
 
   /** Feed my own GPS fix; returns local coords. */
@@ -104,6 +119,14 @@ export class WorldState {
       p.rheading = (a.heading + dh * k + 360) % 360;
       // drop old samples
       while (b.length > 2 && b[1]!.t < rt - 1000) b.shift();
+    }
+    // projectiles: dead-reckon along heading between snapshots (smooth flight)
+    const dtSnap = Math.max(0, (serverNow - this.lastSnapT) / 1000);
+    for (const pr of this.projectiles.values()) {
+      const h = (pr.heading * Math.PI) / 180;
+      const d = Math.min(1.5, dtSnap) * GAME.WEAPONS.rocket.SPEED_MPS;
+      pr.rx = pr.x + Math.sin(h) * d;
+      pr.rz = pr.z - Math.cos(h) * d;
     }
   }
 

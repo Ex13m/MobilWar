@@ -78,9 +78,9 @@ describe("e2e over WebSocket", () => {
     b.send({ type: "pos", lat: north.lat, lon: north.lon, acc: 5, heading: 180, ct: 0 });
     await new Promise((r) => setTimeout(r, 100));
 
-    for (let i = 0; i < 4; i++) {
+    for (let i = 0; i < 10; i++) {
       a.send({ type: "shoot", heading: 0, pitch: 0, ct: 0 });
-      await new Promise((r) => setTimeout(r, GAME.RIFLE_COOLDOWN_MS + 20));
+      await new Promise((r) => setTimeout(r, GAME.RIFLE_COOLDOWN_MS + 30));
     }
     const kill = await b.wait("kill");
     expect(kill.victimId).toBe(room.players.get([...room.players.keys()].find((k) => room.players.get(k)!.nick === "B")!)!.id);

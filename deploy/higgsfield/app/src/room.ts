@@ -203,7 +203,12 @@ export class Room extends DurableObject<Env> {
       case "shoot": {
         if (!conn.shootBucket.take()) return;
         const p = game.players.get(conn.id);
-        if (p) game.shoot(p, Number(msg.heading));
+        if (p) game.shoot(p, Number(msg.heading), msg.weapon);
+        return;
+      }
+      case "weapon": {
+        const p = game.players.get(conn.id);
+        if (p) game.selectWeapon(p, msg.weapon);
         return;
       }
       case "place": {

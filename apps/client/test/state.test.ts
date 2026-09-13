@@ -5,9 +5,10 @@ import type { Snapshot } from "@mobilwar/shared";
 function snap(t: number, x: number): Snapshot {
   return {
     t,
-    room: { id: "R", name: "r", mode: "tdm", origin: { lat: 0, lon: 0 }, radiusM: 100, phase: "playing", phaseEndsAt: 0, score: { red: 0, blue: 0 }, playerCount: 1 },
-    players: [{ id: "a", nick: "A", team: "red", avatar: "scout", playMode: "ar", x, z: 0, heading: 0, hp: 100, alive: true, kills: 0, deaths: 0, supply: 3, acc: 5, t }],
+    room: { id: "R", name: "r", mode: "tdm", origin: { lat: 0, lon: 0 }, radiusM: 100, phase: "playing", phaseEndsAt: 0, score: { red: 0, blue: 0 }, playerCount: 1, bases: { red: { x: 0, z: -55 }, blue: { x: 0, z: 55 } } },
+    players: [{ id: "a", nick: "A", team: "red", avatar: "scout", playMode: "ar", x, z: 0, heading: 0, hp: 100, alive: true, kills: 0, deaths: 0, supply: 3, acc: 5, t, shield: 0, ammo: 2, weapon: "blaster", overchargeUntil: 0, protectedUntil: 0, respawnAt: 0 }],
     objects: [],
+    projectiles: [],
   };
 }
 
