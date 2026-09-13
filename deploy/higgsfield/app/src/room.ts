@@ -85,7 +85,7 @@ export class Room extends DurableObject<Env> {
       ws,
       deviceId: "",
       posBucket: new TokenBucket(10, GAME.POS_HZ * 1.5),
-      shootBucket: new TokenBucket(5, 1000 / GAME.RIFLE_COOLDOWN_MS),
+      shootBucket: new TokenBucket(15, 12),
       msgBucket: new TokenBucket(60, 30),
       send(msg: ServerMsg) {
         try {
@@ -203,7 +203,17 @@ export class Room extends DurableObject<Env> {
       case "shoot": {
         if (!conn.shootBucket.take()) return;
         const p = game.players.get(conn.id);
-        if (p) game.shoot(p, Number(msg.heading), msg.weapon);
+        if (p) game.shoot(p, Number(msg.heading), msg.weapon, { chargeMs: Number(msg.chargeMs) || 0, zoomed: !!msg.zoomed });
+        return;
+      }
+      case "reload": {
+        const p = game.players.get(conn.id);
+        if (p) game.reload(p);
+        return;
+      }
+      case "zoom": {
+        const p = game.players.get(conn.id);
+        if (p) game.setZoom(p, !!msg.on);
         return;
       }
       case "weapon": {

@@ -146,21 +146,45 @@ export class GameAudio {
 
   /* ---------- game cues ---------- */
 
-  shot(weapon: "blaster" | "rocket"): void {
-    if (weapon === "rocket") {
-      this.play("blaster", { gain: 0.9, rate: 0.55, reverb: 0.7 });
-      this.noise(0.5, 0.6, 3000, 300);
-      this.osc(90, 0.35, "sawtooth", 0.35, 40);
-      this.vibrate(40);
-    } else {
-      this.play("laser4", { gain: 0.7, rate: 1.15, reverb: 0.4 });
-      this.osc(140, 0.06, "square", 0.15, 60);
-      this.vibrate(12);
+  shot(weapon: "pistol" | "blaster" | "sniper" | "rocket"): void {
+    switch (weapon) {
+      case "rocket":
+        this.play("blaster", { gain: 0.9, rate: 0.55, reverb: 0.7 });
+        this.noise(0.5, 0.6, 3000, 300);
+        this.osc(90, 0.35, "sawtooth", 0.35, 40);
+        this.vibrate(40);
+        break;
+      case "pistol":
+        this.play("laser1", { gain: 0.6, rate: 1.5, reverb: 0.3 });
+        this.osc(900, 0.05, "square", 0.08, 300);
+        this.vibrate(10);
+        break;
+      case "sniper":
+        this.play("zap", { gain: 1, rate: 0.6, reverb: 0.9 });
+        this.noise(0.25, 0.7, 5000, 400);
+        this.osc(50, 0.5, "sine", 0.7, 30);
+        this.vibrate(35);
+        break;
+      default:
+        this.play("laser4", { gain: 0.7, rate: 1.15, reverb: 0.4 });
+        this.osc(140, 0.06, "square", 0.15, 60);
+        this.vibrate(12);
     }
+  }
+  /** Sniper charge: rising tone while the trigger is held. */
+  charge(k: number): void {
+    this.osc(300 + 900 * k, 0.09, "triangle", 0.12 + 0.2 * k);
+  }
+  reload(weapon: string, ms: number): void {
+    this.play("change", { gain: 0.6, rate: weapon === "sniper" ? 0.7 : 1.0 });
+    setTimeout(() => this.play("impact", { gain: 0.35, rate: 1.6 }), ms * 0.5);
+    setTimeout(() => this.play("confirm", { gain: 0.4, rate: 0.9 }), ms * 0.92);
   }
   remoteShot(weapon: string, rel: { x: number; z: number }, dist: number): void {
     const gain = Math.max(0.05, 1 - dist / 90);
     if (weapon === "rocket") this.play("blaster", { gain, rate: 0.55, rel, dist, reverb: 0.8 });
+    else if (weapon === "pistol") this.play("laser1", { gain: gain * 0.8, rate: 1.5, rel, dist, reverb: 0.4 });
+    else if (weapon === "sniper") this.play("zap", { gain, rate: 0.6, rel, dist, reverb: 1 });
     else if (weapon === "turret") this.play("zap", { gain: gain * 0.8, rate: 0.9, rel, dist });
     else if (weapon === "drone") this.play("laser1", { gain: gain * 0.6, rate: 1.6, rel, dist });
     else this.play("laser4", { gain, rate: 1.1, rel, dist, reverb: 0.6 });

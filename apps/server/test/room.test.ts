@@ -37,14 +37,14 @@ describe("Room", () => {
     expect(d.team).toBe("blue");
   });
 
-  it("blaster hits enemy straight ahead (10 dmg) and kills after 10 hits", () => {
+  it("blaster hits enemy straight ahead (9 dmg) and kills after 12 hits", () => {
     const { room, pa, pb, b, advance, startPlaying } = setup();
     startPlaying();
     expect(room.phase).toBe("playing");
     room.updatePosition(pa, origin.lat, origin.lon, 5, 0);
     const north = destination(origin, 0, 20);
     room.updatePosition(pb, north.lat, north.lon, 5, 180);
-    for (let i = 0; i < 10; i++) {
+    for (let i = 0; i < 12; i++) {
       room.shoot(pa, 0);
       advance(GAME.RIFLE_COOLDOWN_MS + 1);
     }
@@ -71,7 +71,7 @@ describe("Room", () => {
     room.updatePosition(pa, origin.lat, origin.lon, 5, 0);
     const north = destination(origin, 0, 10);
     room.updatePosition(pb, north.lat, north.lon, 5, 180);
-    for (let i = 0; i < 10; i++) {
+    for (let i = 0; i < 12; i++) {
       room.shoot(pa, 0);
       advance(GAME.RIFLE_COOLDOWN_MS + 1);
     }
@@ -101,7 +101,7 @@ describe("Room", () => {
     room.updatePosition(pa, origin.lat, origin.lon, 5, 0);
     const north = destination(origin, 0, 10);
     room.updatePosition(pb, north.lat, north.lon, 5, 180);
-    for (let i = 0; i < 10; i++) {
+    for (let i = 0; i < 12; i++) {
       room.shoot(pa, 0);
       advance(GAME.RIFLE_COOLDOWN_MS + 1);
     }
@@ -133,6 +133,7 @@ describe("Room", () => {
     const { room, pa, startPlaying, advance } = setup();
     startPlaying();
     room.updatePosition(pa, origin.lat, origin.lon, 3, 0);
+    pa.mag.rocket = 0;
     pa.ammo = 0;
     room.shoot(pa, 0, "rocket");
     advance(GAME.WEAPONS.rocket.COOLDOWN_MS + 1);
@@ -198,6 +199,7 @@ describe("Room", () => {
     room.shoot(pa, 0);
     expect(pb.hp).toBe(GAME.MAX_HP);
     expect(pb.shield).toBe(GAME.SHIELD_MAX - GAME.WEAPONS.blaster.DAMAGE);
+    pa.mag.rocket = 0;
     pa.ammo = 0;
     const am = room.spawnPickup(room["now"](), "ammo");
     am.x = pa.x;
@@ -344,12 +346,86 @@ describe("Room", () => {
     room.updatePosition(zombie, origin.lat, origin.lon, 3, 0);
     const n = destination(origin, 0, 10);
     room.updatePosition(human, n.lat, n.lon, 3, 180);
-    for (let i = 0; i < 10; i++) {
+    for (let i = 0; i < 12; i++) {
       room.shoot(zombie, 0);
       advance(GAME.RIFLE_COOLDOWN_MS + 1);
     }
     expect(human.team).toBe("red");
     room.tick();
     expect(room.phase).toBe("ended");
+  });
+
+  it("magazine empties and reloads; switching cancels reload", () => {
+    const { room, pa, pb, a, advance, startPlaying } = setup();
+    startPlaying();
+    room.updatePosition(pa, origin.lat, origin.lon, 3, 0);
+    const north = destination(origin, 0, 20);
+    room.updatePosition(pb, north.lat, north.lon, 3, 180);
+    room.selectWeapon(pa, "pistol");
+    for (let i = 0; i < GAME.WEAPONS.pistol.MAG; i++) {
+      room.shoot(pa, 0);
+      advance(GAME.WEAPONS.pistol.COOLDOWN_MS + 1);
+    }
+    expect(pa.mag.pistol).toBe(0);
+    room.shoot(pa, 0); // empty → auto reload starts
+    expect(a.inbox.some((m) => m.type === "event" && m.kind === "empty")).toBe(true);
+    expect(pa.reloadUntil).toBeGreaterThan(0);
+    advance(GAME.WEAPONS.pistol.RELOAD_MS + 1);
+    room.tick();
+    expect(pa.mag.pistol).toBe(GAME.WEAPONS.pistol.MAG);
+    expect(pa.reserve.pistol).toBe(-1);
+    // rifle: reserve decreases; switching cancels
+    room.selectWeapon(pa, "blaster");
+    pa.mag.blaster = 3;
+    expect(room.reload(pa)).toBe(true);
+    room.selectWeapon(pa, "pistol");
+    expect(pa.reloadUntil).toBe(0);
+    expect(pa.mag.blaster).toBe(3);
+    room.selectWeapon(pa, "blaster");
+    room.reload(pa);
+    advance(GAME.WEAPONS.blaster.RELOAD_MS + 1);
+    room.tick();
+    expect(pa.mag.blaster).toBe(GAME.WEAPONS.blaster.MAG);
+    expect(pa.reserve.blaster).toBe(GAME.WEAPONS.blaster.RESERVE - (GAME.WEAPONS.blaster.MAG - 3));
+  });
+
+  it("rifle bloom grows with continuous fire and decays", () => {
+    const { room, pa, advance, startPlaying } = setup();
+    startPlaying();
+    room.updatePosition(pa, origin.lat, origin.lon, 3, 0);
+    for (let i = 0; i < 8; i++) {
+      room.shoot(pa, 0);
+      advance(GAME.WEAPONS.blaster.COOLDOWN_MS + 1);
+    }
+    expect(pa.bloom).toBeGreaterThan(4);
+    advance(2000);
+    room.shoot(pa, 0);
+    expect(pa.bloom).toBeLessThanOrEqual(GAME.WEAPONS.blaster.BLOOM + 0.01);
+  });
+
+  it("pistol is precise to 10 m then widens; sniper charged shot one-shots", () => {
+    const { room, pa, pb, advance, startPlaying } = setup();
+    startPlaying();
+    room.updatePosition(pa, origin.lat, origin.lon, 1, 0);
+    // target 30 m north, 9° off axis (~4.75 m east): pistol cone at 30 m = min(14, 5 + 20*0.9) = 14 → hit;
+    // GPS floor at acc 1 m is atan(4/30) ≈ 7.6°, so the zoomed sniper (3°) misses at 9°.
+    const far = destination(destination(origin, 0, 30), 90, 4.75);
+    room.updatePosition(pb, far.lat, far.lon, 1, 180);
+    room.selectWeapon(pa, "pistol");
+    room.shoot(pa, 0);
+    expect(pb.hp).toBeLessThan(GAME.MAX_HP);
+    // sniper zoomed cone 3°: same target is off-axis → miss; then aim exactly and charge → 100
+    pb.hp = GAME.MAX_HP;
+    room.selectWeapon(pa, "sniper");
+    room.setZoom(pa, true);
+    advance(GAME.WEAPONS.sniper.COOLDOWN_MS + 1);
+    room.shoot(pa, 0, "sniper", { zoomed: true });
+    expect(pb.hp).toBe(GAME.MAX_HP);
+    const straight = destination(origin, 0, 30);
+    advance(1000);
+    room.updatePosition(pb, straight.lat, straight.lon, 1, 180);
+    advance(GAME.WEAPONS.sniper.COOLDOWN_MS + 1);
+    room.shoot(pa, 0, "sniper", { zoomed: true, chargeMs: 1000 });
+    expect(pb.alive).toBe(false);
   });
 });

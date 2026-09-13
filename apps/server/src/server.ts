@@ -109,7 +109,7 @@ export function createApp(opts: { dbPath?: string } = {}) {
       pathRoom: (new URL(req.url ?? "/", "http://x").pathname.match(/^\/ws\/([A-Za-z0-9_-]{1,64})/)?.[1] ?? "").toUpperCase(),
       deviceId: "",
       posBucket: new TokenBucket(10, GAME.POS_HZ * 1.5),
-      shootBucket: new TokenBucket(5, 1000 / GAME.RIFLE_COOLDOWN_MS),
+      shootBucket: new TokenBucket(15, 12),
       msgBucket: new TokenBucket(60, 30),
       alive: true,
       send(msg: ServerMsg) {
@@ -216,7 +216,17 @@ export function createApp(opts: { dbPath?: string } = {}) {
         if (!conn.shootBucket.take()) return;
         const p = room.players.get(conn.id);
         if (!p) return;
-        room.shoot(p, Number(msg.heading), msg.weapon);
+        room.shoot(p, Number(msg.heading), msg.weapon, { chargeMs: Number(msg.chargeMs) || 0, zoomed: !!msg.zoomed });
+        return;
+      }
+      case "reload": {
+        const p = conn.room?.players.get(conn.id);
+        if (p && conn.room) conn.room.reload(p);
+        return;
+      }
+      case "zoom": {
+        const p = conn.room?.players.get(conn.id);
+        if (p && conn.room) conn.room.setZoom(p, !!msg.on);
         return;
       }
       case "weapon": {

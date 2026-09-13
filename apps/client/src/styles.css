@@ -145,3 +145,17 @@ h2 { font-size: 18px; margin: 0 0 8px; }
 .banner.good { border: 2px solid var(--accent); color: var(--accent); }
 
 .hud [hidden] { display: none !important; }
+
+/* ---- roster: mags, reload, sniper scope, charge ---- */
+.hud .wbtn small.empty { color: var(--red); }
+.hud .reload, .hud .zoom { flex: 1; background: var(--panel); border: 2px solid #374151; border-radius: 12px; color: var(--fg); min-height: 40px; font-size: 13px; }
+.hud .zoom.active { border-color: var(--warn); color: var(--warn); }
+.hud .reloadbar { position: absolute; left: 50%; top: 56%; transform: translateX(-50%); width: 160px; height: 8px; background: rgba(0,0,0,.5); border-radius: 4px; border: 1px solid #374151; }
+.hud .reloadbar i { display: block; height: 100%; background: var(--warn); border-radius: 4px; }
+.hud .reloadbar span { position: absolute; top: 12px; left: 0; right: 0; text-align: center; font-size: 12px; color: var(--warn); }
+.hud .crosshair .charge { position: absolute; inset: -8px; border-radius: 50%; border: 3px solid transparent; border-top-color: var(--warn); opacity: calc(var(--k, 0) * 1); transform: rotate(calc(var(--k, 0) * 360deg)); pointer-events: none; }
+.hud .crosshair .charge.full { border-color: var(--red); }
+.hud .scope { position: absolute; inset: 0; pointer-events: none; background: radial-gradient(circle at 50% 50%, transparent 30%, rgba(0,0,0,.85) 32%); }
+.hud .scope::before, .hud .scope::after { content: ""; position: absolute; left: 50%; top: 50%; background: rgba(255,255,255,.6); }
+.hud .scope::before { width: 2px; height: 60%; margin: -30% 0 0 -1px; } .hud .scope::after { height: 2px; width: 60%; margin: -1px 0 0 -30%; }
+.hud.zoomed .radar, .hud.zoomed .feed { opacity: .35; }

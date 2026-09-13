@@ -26,11 +26,13 @@ export interface HitCandidate {
  * the disc subtends atan(R/dist) — so close targets are "bigger".
  * R = base + 0.5*(shooterAcc + targetAcc), clamped so the cone never exceeds 45°.
  */
-export function effectiveHalfAngle(dist: number, shooterAcc: number, targetAcc: number): number {
+export function effectiveHalfAngle(dist: number, shooterAcc: number, targetAcc: number, weaponCone: number = GAME.CONE_HALF_ANGLE_DEG): number {
   const R = GAME.HIT_RADIUS_BASE_M + 0.5 * (clampAcc(shooterAcc) + clampAcc(targetAcc));
   const fromRadius = (Math.atan2(R, Math.max(dist, 0.5)) * 180) / Math.PI;
-  return Math.min(45, Math.max(GAME.CONE_HALF_ANGLE_DEG, fromRadius));
+  return Math.min(45, Math.max(weaponCone, fromRadius));
 }
+
+export type ConeFn = number | ((dist: number) => number);
 
 function clampAcc(a: number): number {
   if (!Number.isFinite(a) || a < 0) return GAME.MAX_ACCURACY_M;
@@ -47,6 +49,7 @@ export function resolveShot(
   heading: number,
   targets: Target[],
   rangeM: number = GAME.RIFLE_RANGE_M,
+  cone: ConeFn = GAME.CONE_HALF_ANGLE_DEG,
 ): HitCandidate | null {
   let best: HitCandidate | null = null;
   for (const t of targets) {
@@ -54,7 +57,7 @@ export function resolveShot(
     if (dist > rangeM || dist < 0.3) continue;
     const brg = bearingLocal(shooter, t);
     const angErr = Math.abs(angleDiff(heading, brg));
-    const allowed = effectiveHalfAngle(dist, shooter.acc, t.acc);
+    const allowed = effectiveHalfAngle(dist, shooter.acc, t.acc, typeof cone === "function" ? cone(dist) : cone);
     if (angErr > allowed) continue;
     // Prefer targets closer to the centre line, then nearer ones.
     const score = (1 - angErr / allowed) * 0.7 + (1 - dist / rangeM) * 0.3;
@@ -104,6 +107,18 @@ export function rayEnd(from: Vec2, heading: number, len: number): Vec2 {
 export function splashDamage(dist: number, radius: number, center: number, edge: number): number {
   if (dist >= radius) return 0;
   return Math.round(center + (edge - center) * (dist / radius));
+}
+
+/**
+ * Weapon half-angle (deg) before the GPS floor is applied.
+ * pistol: precise to 10 m, then widens per metre; rifle: base + bloom; sniper: zoom-dependent.
+ */
+export function weaponCone(weapon: keyof typeof GAME.WEAPONS, dist: number, bloom = 0, zoomed = false): number {
+  const W = GAME.WEAPONS[weapon];
+  if (weapon === "pistol") return Math.min(W.CONE_MAX, W.CONE + Math.max(0, dist - 10) * W.CONE_PER_M);
+  if (weapon === "blaster") return Math.min(W.CONE_MAX, W.CONE + bloom);
+  if (weapon === "sniper") return zoomed ? W.CONE : GAME.SNIPER_HIP_CONE;
+  return W.CONE;
 }
 
 /** Damage falloff: full up to 60% of range, then linear to 40% at max range. */

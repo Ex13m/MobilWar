@@ -35,6 +35,15 @@ export interface PlayerPublic {
   ammo: number;
   /** Currently selected weapon (for viewmodels on other clients). */
   weapon: WeaponId;
+  /** Rounds in the current magazine per weapon and spare rounds. */
+  mag: Record<WeaponId, number>;
+  reserve: Record<WeaponId, number>;
+  /** Epoch ms until a reload finishes (0 = not reloading). */
+  reloadUntil: number;
+  /** Current bloom (deg) added to the rifle cone. */
+  bloom: number;
+  /** Sniper zoom on (affects cone). */
+  zoomed: boolean;
   /** Epoch ms until which the overcharge buff is active (0 = none). */
   overchargeUntil: number;
   /** Epoch ms until which spawn protection is active. */
@@ -130,6 +139,10 @@ export interface PosMsg {
 export interface ShootMsg {
   type: "shoot";
   weapon?: WeaponId;
+  /** Sniper: how long the trigger was held (ms) — server clamps against CHARGE_MS and its own timers. */
+  chargeMs?: number;
+  /** Sniper: zoomed when fired. */
+  zoomed?: boolean;
   heading: number;
   /** Pitch in degrees, positive = up. Used only for AR feedback; hits are 2D. */
   pitch: number;
@@ -139,6 +152,15 @@ export interface ShootMsg {
 export interface SelectWeaponMsg {
   type: "weapon";
   weapon: WeaponId;
+}
+
+export interface ReloadMsg {
+  type: "reload";
+}
+
+export interface ZoomMsg {
+  type: "zoom";
+  on: boolean;
 }
 
 export interface PlaceObjectMsg {
@@ -182,6 +204,8 @@ export type ClientMsg =
   | PosMsg
   | ShootMsg
   | SelectWeaponMsg
+  | ReloadMsg
+  | ZoomMsg
   | PlaceObjectMsg
   | RefereeCmdMsg
   | PingMsg
@@ -248,7 +272,9 @@ export interface EventMsg {
     | "explosion"
     | "pickup"
     | "pickup_spawned"
-    | "respawn";
+    | "respawn"
+    | "reload"
+    | "empty";
   data?: Record<string, unknown>;
 }
 

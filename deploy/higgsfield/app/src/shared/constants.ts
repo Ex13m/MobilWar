@@ -7,23 +7,38 @@ export const GAME = {
   MAX_HP: 100,
   /** Shield capacity granted by a shield pickup (absorbs damage before HP). */
   SHIELD_MAX: 50,
-  /** Weapons. Damage is in HP points: blaster = 10 % of HP, rocket = up to 50 %. */
+  /**
+   * Weapons. Damage in HP points. cone = base half-angle (deg); bloom adds per shot (rifle),
+   * decays at bloomDecay deg/s. mag/reserve = magazine size and spare rounds per life
+   * (reserve -1 = infinite). charge (sniper): hold time (ms) for a charged shot.
+   */
   WEAPONS: {
-    blaster: { DAMAGE: 10, RANGE_M: 60, COOLDOWN_MS: 250, SPEED_MPS: 70 },
+    pistol: { DAMAGE: 12, RANGE_M: 35, COOLDOWN_MS: 200, SPEED_MPS: 80, CONE: 5, CONE_MAX: 14, CONE_PER_M: 0.9, BLOOM: 0, BLOOM_DECAY: 0, MAG: 12, RESERVE: -1, RELOAD_MS: 1000, SPLASH_M: 0, AMMO: 0, FUSE_M: 0, CHARGE_MS: 0, CHARGED_DAMAGE: 0 },
+    blaster: { DAMAGE: 9, RANGE_M: 60, COOLDOWN_MS: 100, SPEED_MPS: 70, CONE: 7, CONE_MAX: 16, CONE_PER_M: 0, BLOOM: 0.8, BLOOM_DECAY: 10, MAG: 30, RESERVE: 120, RELOAD_MS: 2000, SPLASH_M: 0, AMMO: 0, FUSE_M: 0, CHARGE_MS: 0, CHARGED_DAMAGE: 0 },
+    sniper: { DAMAGE: 50, RANGE_M: 120, COOLDOWN_MS: 1200, SPEED_MPS: 200, CONE: 3, CONE_MAX: 12, CONE_PER_M: 0, BLOOM: 0, BLOOM_DECAY: 0, MAG: 5, RESERVE: 20, RELOAD_MS: 2800, SPLASH_M: 0, AMMO: 0, FUSE_M: 0, CHARGE_MS: 800, CHARGED_DAMAGE: 100 },
     rocket: {
       DAMAGE: 50,
-      /** Damage at the splash edge. */
       DAMAGE_EDGE: 15,
       SPLASH_M: 6,
       RANGE_M: 45,
       COOLDOWN_MS: 2500,
       SPEED_MPS: 22,
-      /** Rockets per life. */
       AMMO: 2,
-      /** Proximity fuse: explode when this close to an enemy/object (m). */
       FUSE_M: 3,
+      CONE: 10,
+      CONE_MAX: 10,
+      CONE_PER_M: 0,
+      BLOOM: 0,
+      BLOOM_DECAY: 0,
+      MAG: 1,
+      RESERVE: 0,
+      RELOAD_MS: 3000,
+      CHARGE_MS: 0,
+      CHARGED_DAMAGE: 0,
     },
   },
+  /** Cone when firing the sniper from the hip (not zoomed) vs zoomed. */
+  SNIPER_HIP_CONE: 12,
   /** Legacy aliases (blaster). */
   RIFLE_DAMAGE: 10,
   RIFLE_RANGE_M: 60,
@@ -96,7 +111,10 @@ export const GAME = {
 } as const;
 
 export type WeaponId = keyof typeof GAME.WEAPONS;
-export const WEAPON_IDS = ["blaster", "rocket"] as const satisfies readonly WeaponId[];
+export const WEAPON_IDS = ["pistol", "blaster", "sniper", "rocket"] as const satisfies readonly WeaponId[];
+/** Primary weapons a class can pick; pistol is always carried; rocket comes from ammo pickups. */
+export const PRIMARY_WEAPONS = ["blaster", "sniper"] as const;
+export const WEAPON_NAMES: Record<WeaponId, string> = { pistol: "Искра", blaster: "Гроза", sniper: "Горизонт", rocket: "Молот" };
 
 export const TEAMS = ["red", "blue"] as const;
 export type Team = (typeof TEAMS)[number];

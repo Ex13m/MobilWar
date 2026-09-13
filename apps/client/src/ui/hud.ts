@@ -3,8 +3,11 @@ import type { WorldState } from "../state.js";
 
 export interface HudCallbacks {
   onFire(): void;
+  onFireEnd(): void;
   onFireRocket(): void;
   onWeapon(w: WeaponId): void;
+  onReload(): void;
+  onZoom(): void;
   onPlace(kind: Extract<ObjectKind, "turret" | "barrier" | "drone" | "medkit">): void;
   onMenu(): void;
 }
@@ -32,7 +35,9 @@ export class Hud {
         <div class="streak" hidden>серия <b>0</b></div>
         <div class="feed"></div>
         <div class="radar"><canvas width="192" height="192"></canvas></div>
-        <div class="crosshair"><i class="hm"></i></div>
+        <div class="crosshair"><i class="hm"></i><i class="charge"></i></div>
+        <div class="scope" hidden></div>
+        <div class="reloadbar" hidden><i></i><span>перезарядка</span></div>
         <div class="banner" hidden></div>
         <div class="dead" hidden>
           <div class="dead-title">ТЫ ВЫБЫЛ</div>
@@ -54,9 +59,15 @@ export class Hud {
             <div class="hpbar">${Array.from({ length: 10 }, () => "<i></i>").join("")}</div>
             <div class="shieldbar"><i></i></div>
             <div class="weapons">
-              <button class="wbtn active" data-w="blaster"><b>Гроза</b><small>∞</small></button>
+              <button class="wbtn" data-w="pistol"><b>Искра</b><small class="mag" data-w="pistol">12</small></button>
+              <button class="wbtn active" data-w="blaster"><b>Гроза</b><small class="mag" data-w="blaster">30/120</small></button>
+              <button class="wbtn" data-w="sniper"><b>Горизонт</b><small class="mag" data-w="sniper">5/20</small></button>
               <button class="wbtn" data-w="rocket"><b>Молот</b><small class="ammo">2</small></button>
-              <button class="place">🛠<small class="supply">${GAME.SUPPLY_PER_PLAYER}</small></button>
+            </div>
+            <div class="weapons">
+              <button class="place">🛠 <small class="supply">${GAME.SUPPLY_PER_PLAYER}</small></button>
+              <button class="reload">⟳ Перезарядка</button>
+              <button class="zoom" hidden>🔭 Зум</button>
             </div>
           </div>
           <div class="firecol">
@@ -78,6 +89,7 @@ export class Hud {
     const stopFire = () => {
       if (holdTimer) clearInterval(holdTimer);
       holdTimer = null;
+      cb.onFireEnd();
     };
     fire.addEventListener("pointerdown", startFire);
     fire.addEventListener("pointerup", stopFire);
@@ -103,11 +115,41 @@ export class Hud {
         cb.onWeapon(b.dataset.w as WeaponId);
       }),
     );
+    this.q(".reload").addEventListener("click", () => cb.onReload());
+    this.q(".zoom").addEventListener("click", () => cb.onZoom());
     this.q(".menu").addEventListener("click", () => cb.onMenu());
+  }
+
+  /** Magazine / reserve per weapon; -1 reserve = infinite. */
+  setAmmo(mag: Record<WeaponId, number>, reserve: Record<WeaponId, number>): void {
+    for (const w of ["pistol", "blaster", "sniper"] as const) {
+      const el = this.el.querySelector<HTMLElement>(`.mag[data-w="${w}"]`);
+      if (el) {
+        el.textContent = reserve[w] < 0 ? `${mag[w]}` : `${mag[w]}/${reserve[w]}`;
+        el.classList.toggle("empty", mag[w] === 0);
+      }
+    }
+  }
+  setReloading(k: number | null): void {
+    const b = this.q<HTMLElement>(".reloadbar");
+    b.hidden = k === null;
+    if (k !== null) b.querySelector("i")!.style.width = `${Math.round(k * 100)}%`;
+  }
+  setCharge(k: number): void {
+    const c = this.q<HTMLElement>(".charge");
+    c.style.setProperty("--k", String(k));
+    c.classList.toggle("full", k >= 1);
+  }
+  setZoom(on: boolean, available: boolean): void {
+    this.q<HTMLElement>(".zoom").hidden = !available;
+    this.q<HTMLElement>(".zoom").classList.toggle("active", on);
+    this.q<HTMLElement>(".scope").hidden = !on;
+    this.el.classList.toggle("zoomed", on);
   }
 
   setWeapon(w: WeaponId): void {
     this.el.querySelectorAll<HTMLButtonElement>(".wbtn").forEach((b) => b.classList.toggle("active", b.dataset.w === w));
+    this.q(".fire").textContent = w === "rocket" ? "Ракета" : w === "sniper" ? "Держи" : "Огонь";
   }
   setScore(red: number, blue: number): void {
     this.q(".score .red").textContent = String(red);

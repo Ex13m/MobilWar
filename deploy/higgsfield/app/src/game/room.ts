@@ -16,6 +16,8 @@ import {
   firstBarrierOnPath,
   rayEnd,
   splashDamage,
+  weaponCone,
+  WEAPON_IDS,
   PICKUP_KINDS,
   type WeaponId,
   type Projectile,
@@ -52,6 +54,8 @@ export interface Player extends PlayerPublic {
   infected?: boolean;
   /** Per-weapon last shot time. */
   lastShotByWeapon: Record<WeaponId, number>;
+  /** Server time when rifle bloom was last updated. */
+  bloomAt: number;
 }
 
 interface Turret extends WorldObject {
@@ -198,7 +202,13 @@ export class Room {
       weapon: "blaster",
       overchargeUntil: 0,
       protectedUntil: 0,
-      lastShotByWeapon: { blaster: 0, rocket: 0 },
+      lastShotByWeapon: { pistol: 0, blaster: 0, sniper: 0, rocket: 0 },
+      mag: fullMags(),
+      reserve: fullReserve(),
+      reloadUntil: 0,
+      bloom: 0,
+      zoomed: false,
+      bloomAt: 0,
     };
     this.players.set(p.id, p);
     this.lastActiveAt = this.now();
@@ -270,31 +280,92 @@ export class Room {
   }
 
   selectWeapon(p: Player, w: WeaponId): void {
-    if (w === "blaster" || w === "rocket") p.weapon = w;
+    if (!WEAPON_IDS.includes(w) || p.weapon === w) return;
+    p.weapon = w;
+    p.reloadUntil = 0; // switching cancels a reload
+    if (w !== "sniper") p.zoomed = false;
   }
 
-  shoot(p: Player, heading: number, weapon: WeaponId = p.weapon): void {
+  setZoom(p: Player, on: boolean): void {
+    p.zoomed = on && p.weapon === "sniper";
+  }
+
+  /** Start reloading the current weapon (no-op if full / nothing spare / already reloading). */
+  reload(p: Player, weapon: WeaponId = p.weapon): boolean {
+    const t = this.now();
+    this.settleReload(p, t);
+    if (p.reloadUntil > t || !p.alive) return false;
+    const W = GAME.WEAPONS[weapon];
+    if (weapon === "rocket") return false; // rockets have no magazine; ammo comes from pickups
+    if (p.mag[weapon] >= W.MAG) return false;
+    if (p.reserve[weapon] === 0) return false;
+    p.reloadUntil = t + W.RELOAD_MS;
+    p.weapon = weapon;
+    this.broadcast({ type: "event", kind: "reload", data: { id: p.id, weapon, ms: W.RELOAD_MS } });
+    return true;
+  }
+
+  /** Complete a finished reload: move rounds from reserve into the magazine. */
+  private settleReload(p: Player, t: number): void {
+    if (!p.reloadUntil || t < p.reloadUntil) return;
+    p.reloadUntil = 0;
+    const w = p.weapon;
+    if (w === "rocket") return;
+    const W = GAME.WEAPONS[w];
+    const need = W.MAG - p.mag[w];
+    const take = p.reserve[w] < 0 ? need : Math.min(need, p.reserve[w]);
+    p.mag[w] += take;
+    if (p.reserve[w] >= 0) p.reserve[w] -= take;
+  }
+
+  /** Rifle bloom decays once the trigger has been released for a moment (grace 250 ms). */
+  private settleBloom(p: Player, t: number): void {
+    const since = t - (p.bloomAt || t);
+    const dt = Math.max(0, (since - 250) / 1000);
+    if (dt > 0) p.bloom = Math.max(0, p.bloom - GAME.WEAPONS.blaster.BLOOM_DECAY * dt);
+  }
+
+  shoot(p: Player, heading: number, weapon: WeaponId = p.weapon, opts: { chargeMs?: number; zoomed?: boolean } = {}): void {
     const t = this.now();
     if (this.phase !== "playing" || !p.alive || p.isReferee) return;
     if (p.outOfBoundsSince) return;
     if (!p.lastSample) return;
-    if (weapon !== "blaster" && weapon !== "rocket") weapon = "blaster";
+    if (!WEAPON_IDS.includes(weapon)) weapon = "blaster";
     const W = GAME.WEAPONS[weapon];
+    this.settleReload(p, t);
+    this.settleBloom(p, t);
+    if (p.reloadUntil > t) return;
     if (t - p.lastShotByWeapon[weapon] < W.COOLDOWN_MS) return;
-    if (weapon === "rocket" && p.ammo <= 0) return;
+    if (p.mag[weapon] <= 0) {
+      p.client.send({ type: "event", kind: "empty", data: { weapon } });
+      if (weapon !== "rocket") this.reload(p, weapon); // auto-reload when spare rounds exist
+      return;
+    }
+    const prevShot = p.lastShotByWeapon[weapon];
     p.lastShotByWeapon[weapon] = t;
     p.lastShotAt = t;
     p.weapon = weapon;
+    p.mag[weapon]--;
+    if (weapon === "rocket") p.ammo = p.mag.rocket;
     const h = Number.isFinite(heading) ? heading : p.heading;
     p.heading = ((h % 360) + 360) % 360;
 
     if (weapon === "rocket") {
-      p.ammo--;
       this.launchRocket(p, t);
       return;
     }
 
-    // ---- blaster: hitscan with GPS-tolerant cone, blocked by barriers
+    // ---- hitscan weapons: GPS-tolerant cone, blocked by barriers
+    const zoomed = weapon === "sniper" && (opts.zoomed ?? p.zoomed);
+    const bloomNow = p.bloom;
+    const cone = (dist: number) => weaponCone(weapon, dist, bloomNow, zoomed);
+    if (weapon === "blaster") {
+      p.bloom = Math.min(W.CONE_MAX - W.CONE, p.bloom + W.BLOOM);
+      p.bloomAt = t;
+    }
+    // Sniper charge: the client reports hold time; the server clamps it to the time since the previous shot.
+    const charge = weapon === "sniper" ? Math.min(opts.chargeMs ?? 0, t - prevShot) : 0;
+    const charged = weapon === "sniper" && charge >= W.CHARGE_MS;
     const targets = [
       ...[...this.players.values()]
         .filter((q) => q.id !== p.id && q.alive && !q.isReferee && this.isEnemy(p, q) && q.lastSample && q.protectedUntil <= t)
@@ -303,8 +374,7 @@ export class Room {
         .filter((o) => o.hp > 0 && o.team !== null && o.team !== p.team && (o.kind === "turret" || o.kind === "drone"))
         .map((o) => ({ id: o.id, x: o.x, z: o.z, acc: 0 })),
     ];
-    // Barriers are cover, not targets: a shot that hits nothing still chips the first barrier on its line.
-    const hit = resolveShot({ x: p.x, z: p.z, acc: p.acc }, p.heading, targets, W.RANGE_M);
+    const hit = resolveShot({ x: p.x, z: p.z, acc: p.acc }, p.heading, targets, W.RANGE_M, cone);
     const evt: ServerMsg = { type: "shot", weapon, shooterId: p.id, x: p.x, z: p.z, heading: p.heading };
     if (hit) {
       const tgt = this.players.get(hit.id) ?? this.objects.get(hit.id);
@@ -313,14 +383,14 @@ export class Room {
         evt.blockedBy = barrier.id;
         this.damageObject(barrier, Math.round(W.DAMAGE / 2));
       } else {
-        let dmg = damageAtDistance(W.DAMAGE, hit.dist, W.RANGE_M);
-        if (p.overchargeUntil > t) dmg *= GAME.OVERCHARGE_MULT;
+        let dmg = charged ? W.CHARGED_DAMAGE : weapon === "sniper" ? W.DAMAGE : damageAtDistance(W.DAMAGE, hit.dist, W.RANGE_M);
+        if (p.overchargeUntil > t && weapon !== "sniper") dmg *= GAME.OVERCHARGE_MULT;
         const victim = this.players.get(hit.id);
         evt.targetId = hit.id;
         evt.damage = dmg;
         if (victim) {
           evt.targetKind = "player";
-          this.damagePlayer(victim, dmg, p, "blaster");
+          this.damagePlayer(victim, dmg, p, weapon);
         } else {
           const obj = this.objects.get(hit.id);
           if (obj) {
@@ -329,8 +399,7 @@ export class Room {
           }
         }
       }
-    }
-    else {
+    } else {
       const wall = this.barrierBetween(p, rayEnd(p, p.heading, W.RANGE_M));
       if (wall) {
         evt.blockedBy = wall.id;
@@ -500,10 +569,10 @@ export class Room {
       p.hasFlag = false;
       p.infected = false;
       p.shield = 0;
-      p.ammo = GAME.WEAPONS.rocket.AMMO;
       p.overchargeUntil = 0;
       p.protectedUntil = 0;
       p.respawnAt = 0;
+      this.resetLoadout(p);
     }
     this.objects.clear();
     this.projectiles.clear();
@@ -527,9 +596,18 @@ export class Room {
       p.hasFlag = false;
       p.infected = false;
       p.shield = 0;
-      p.ammo = GAME.WEAPONS.rocket.AMMO;
       p.respawnAt = 0;
+      this.resetLoadout(p);
     }
+  }
+
+  private resetLoadout(p: Player): void {
+    p.mag = fullMags();
+    p.reserve = fullReserve();
+    p.ammo = p.mag.rocket;
+    p.reloadUntil = 0;
+    p.bloom = 0;
+    p.zoomed = false;
   }
 
   setZone(origin?: LatLon, radiusM?: number, polygon?: LatLon[]): void {
@@ -572,6 +650,7 @@ export class Room {
       return;
     }
     this.lastTickAt = t;
+    for (const p of this.players.values()) this.settleReload(p, t);
     this.tickRespawns(t);
     this.tickProjectiles(t);
     this.tickTurrets(t);
@@ -598,7 +677,7 @@ export class Room {
     p.alive = true;
     p.hp = GAME.MAX_HP;
     p.shield = 0;
-    p.ammo = GAME.WEAPONS.rocket.AMMO;
+    this.resetLoadout(p);
     p.respawnAt = 0;
     p.protectedUntil = t + GAME.SPAWN_PROTECT_MS;
     this.broadcast({ type: "event", kind: "respawn", data: { id: p.id } });
@@ -670,10 +749,15 @@ export class Room {
         if (p.hp >= GAME.MAX_HP) return false;
         p.hp = Math.min(GAME.MAX_HP, p.hp + 50);
         return true;
-      case "ammo":
-        if (p.ammo >= GAME.WEAPONS.rocket.AMMO + 2) return false;
-        p.ammo += 2;
+      case "ammo": {
+        const primary = p.weapon === "rocket" || p.weapon === "pistol" ? "blaster" : p.weapon;
+        const full = p.mag.rocket >= GAME.WEAPONS.rocket.AMMO + 2 && (p.reserve[primary] < 0 || p.reserve[primary] >= GAME.WEAPONS[primary].RESERVE);
+        if (full) return false;
+        p.mag.rocket = Math.min(GAME.WEAPONS.rocket.AMMO + 2, p.mag.rocket + 2);
+        p.ammo = p.mag.rocket;
+        if (p.reserve[primary] >= 0) p.reserve[primary] = Math.min(GAME.WEAPONS[primary].RESERVE, p.reserve[primary] + GAME.WEAPONS[primary].MAG);
         return true;
+      }
       case "shield":
         if (p.shield >= GAME.SHIELD_MAX) return false;
         p.shield = GAME.SHIELD_MAX;
@@ -915,8 +999,13 @@ export function publicView(p: Player): PlayerPublic {
     t: p.t,
     hasFlag: p.hasFlag,
     shield: p.shield,
-    ammo: p.ammo,
+    ammo: p.mag.rocket,
     weapon: p.weapon,
+    mag: { ...p.mag },
+    reserve: { ...p.reserve },
+    reloadUntil: p.reloadUntil,
+    bloom: Math.round(p.bloom * 10) / 10,
+    zoomed: p.zoomed,
     overchargeUntil: p.overchargeUntil,
     protectedUntil: p.protectedUntil,
     respawnAt: p.alive ? 0 : p.respawnAt,
@@ -931,6 +1020,13 @@ export function publicObject(o: WorldObject): WorldObject {
   if (y !== undefined) out.y = y;
   if (expiresAt !== undefined) out.expiresAt = expiresAt;
   return out;
+}
+
+export function fullMags(): Record<WeaponId, number> {
+  return { pistol: GAME.WEAPONS.pistol.MAG, blaster: GAME.WEAPONS.blaster.MAG, sniper: GAME.WEAPONS.sniper.MAG, rocket: GAME.WEAPONS.rocket.AMMO };
+}
+export function fullReserve(): Record<WeaponId, number> {
+  return { pistol: GAME.WEAPONS.pistol.RESERVE, blaster: GAME.WEAPONS.blaster.RESERVE, sniper: GAME.WEAPONS.sniper.RESERVE, rocket: 0 };
 }
 
 /** Small deterministic PRNG (for pickup placement; seedable in tests). */

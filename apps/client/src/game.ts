@@ -1,5 +1,5 @@
 import * as THREE from "three";
-import { GAME, angleDiff, bearingLocal, distLocal, resolveShot, type ObjectKind, type PlayMode, type ServerMsg, type WeaponId } from "@mobilwar/shared";
+import { GAME, WEAPON_NAMES, angleDiff, bearingLocal, distLocal, resolveShot, weaponCone, type ObjectKind, type PlayMode, type ServerMsg, type WeaponId } from "@mobilwar/shared";
 import { ArScene } from "./ar/scene.js";
 import { CameraFeed } from "./ar/camera-feed.js";
 import { GameAudio } from "./audio.js";
@@ -39,7 +39,12 @@ export class Game {
   private posTimer: number | null = null;
   private offNet: (() => void) | null = null;
   private raf: number | null = null;
-  private lastShotAt: Record<WeaponId, number> = { blaster: 0, rocket: 0 };
+  private lastShotAt: Record<WeaponId, number> = { pistol: 0, blaster: 0, sniper: 0, rocket: 0 };
+  private chargeStart = 0;
+  private zoomed = false;
+  private reloadStart = 0;
+  private reloadEnd = 0;
+  private lastChargeTone = 0;
   private lastFixSentT = 0;
   private wakeLock: WakeLockSentinel | null = null;
   private joined = false;
@@ -70,9 +75,12 @@ export class Game {
       this.scene = new ArScene(canvas);
       (window as unknown as { __mw?: unknown }).__mw = { scene: this.scene, world: this.world };
       this.hud = new Hud(root, {
-        onFire: () => this.fire(this.weapon === "rocket" ? "blaster" : this.weapon),
+        onFire: () => this.trigger(),
+        onFireEnd: () => this.triggerEnd(),
         onFireRocket: () => this.fire("rocket"),
         onWeapon: (w) => this.selectWeapon(w),
+        onReload: () => this.reload(),
+        onZoom: () => this.toggleZoom(),
         onPlace: (k) => this.place(k),
         onMenu: () => this.exit(),
       });
@@ -190,44 +198,89 @@ export class Game {
   private selectWeapon(w: WeaponId): void {
     if (w === this.weapon) return;
     this.weapon = w;
+    if (this.zoomed) this.toggleZoom();
+    this.reloadEnd = 0;
     this.o.audio.weaponSwitch();
     this.net.send({ type: "weapon", weapon: w });
     void this.scene?.viewmodel.setWeapon(w);
     this.hud?.setWeapon(w);
+    this.hud?.setZoom(false, w === "sniper");
   }
 
-  private fire(w: WeaponId): void {
+  private reload(): void {
+    this.net.send({ type: "reload" });
+  }
+
+  private toggleZoom(): void {
+    if (this.weapon !== "sniper" && !this.zoomed) return;
+    this.zoomed = !this.zoomed;
+    this.net.send({ type: "zoom", on: this.zoomed });
+    if (this.scene) {
+      this.scene.zoom = this.zoomed ? 3 : 1;
+      this.scene.viewmodel.visible = !this.zoomed && this.world.me.alive;
+    }
+    this.hud?.setZoom(this.zoomed, this.weapon === "sniper");
+    this.o.audio.weaponSwitch();
+  }
+
+  /** Fire button pressed: sniper starts charging, everything else fires. */
+  private trigger(): void {
+    if (this.weapon === "sniper") {
+      if (!this.chargeStart) this.chargeStart = performance.now();
+      return;
+    }
+    this.fire(this.weapon);
+  }
+
+  /** Fire button released: sniper fires with the accumulated charge. */
+  private triggerEnd(): void {
+    if (this.weapon !== "sniper" || !this.chargeStart) return;
+    const held = performance.now() - this.chargeStart;
+    this.chargeStart = 0;
+    this.hud?.setCharge(0);
+    this.fire("sniper", held);
+  }
+
+  private fire(w: WeaponId, chargeMs = 0): void {
     const now = performance.now();
     const W = GAME.WEAPONS[w];
     if (now - this.lastShotAt[w] < W.COOLDOWN_MS) return;
     if (!this.world.me.alive) return;
-    if (w === "rocket" && this.world.me.ammo <= 0) {
+    if (this.reloadEnd > now) return;
+    const me = this.world.myPlayer();
+    const rounds = w === "rocket" ? this.world.me.ammo : (me?.mag[w] ?? 1);
+    if (rounds <= 0) {
       this.o.audio.empty();
-      this.hud?.banner("Нет ракет — ищи боезапас", "warn", 1500);
+      if (w === "rocket") this.hud?.banner("Нет ракет — ищи боезапас", "warn", 1500);
+      else this.net.send({ type: "reload" });
       return;
     }
     this.lastShotAt[w] = now;
     const heading = this.o.sensors.orient.heading;
     this.o.audio.shot(w);
-    this.net.send({ type: "shoot", weapon: w, heading, pitch: this.o.sensors.orient.pitch, ct: now });
+    this.net.send({ type: "shoot", weapon: w, heading, pitch: this.o.sensors.orient.pitch, ct: now, chargeMs: Math.round(chargeMs), zoomed: this.zoomed });
     if (this.scene) {
       if (w !== this.scene.viewmodel.current) void this.scene.viewmodel.setWeapon(w);
       this.scene.viewmodel.fire();
-      if (w === "blaster") {
+      if (w !== "rocket") {
         // Immediate local bolt from the muzzle; the server decides the hit.
-        const from = this.scene.muzzleInWorld();
+        const from = this.zoomed ? undefined : this.scene.muzzleInWorld();
         const hot = this.aimTarget();
-        const preset = WEAPON_PRESETS.blaster;
+        const preset = WEAPON_PRESETS[w];
         this.scene.bolt(this.world.me.x, this.world.me.z, heading, W.RANGE_M, preset.boltColor, hot ? { x: hot.x, z: hot.z } : undefined, from);
       }
     }
   }
 
   private aimTarget(): { id: string; x: number; z: number } | null {
+    const w = this.weapon;
+    const me = this.world.myPlayer();
     const hot = resolveShot(
       { x: this.world.me.x, z: this.world.me.z, acc: this.world.me.acc },
       this.o.sensors.orient.heading,
       this.world.enemies().map((e) => ({ id: e.id, x: e.rx, z: e.rz, acc: e.acc })),
+      GAME.WEAPONS[w].RANGE_M,
+      (d) => weaponCone(w, d, me?.bloom ?? 0, this.zoomed),
     );
     if (!hot) return null;
     const p = this.world.players.get(hot.id);
@@ -274,7 +327,7 @@ export class Game {
       case "kill": {
         const k = this.world.players.get(m.killerId)?.nick ?? (m.killerId === "turret" ? "Турель" : m.killerId === "drone" ? "Дрон" : "?");
         const v = this.world.players.get(m.victimId)?.nick ?? (m.victimId === this.world.myId ? "тебя" : "?");
-        const wname = m.weapon === "rocket" ? "ракетой" : m.weapon === "turret" ? "турелью" : m.weapon === "drone" ? "дроном" : "бластером";
+        const wname = m.weapon === "turret" ? "турелью" : m.weapon === "drone" ? "дроном" : `из «${WEAPON_NAMES[m.weapon]}»`;
         this.hud?.feed(`${k} ✕ ${v}`);
         if (m.victimId === this.world.myId) {
           this.dead = true;
@@ -403,6 +456,17 @@ export class Game {
         } else this.hud?.feed(`${this.world.players.get(String(data?.by))?.nick ?? "?"} подобрал: ${names[k] ?? k}`);
         return;
       }
+      case "reload":
+        if (data?.id === this.world.myId) {
+          const ms = Number(data?.ms ?? 2000);
+          this.reloadStart = performance.now();
+          this.reloadEnd = this.reloadStart + ms;
+          this.o.audio.reload(String(data?.weapon), ms);
+        }
+        return;
+      case "empty":
+        this.o.audio.empty();
+        return;
       case "respawn":
         if (data?.id === this.world.myId) {
           this.dead = false;
@@ -461,6 +525,17 @@ export class Game {
       this.hud.setNet(net.rtt, net.connected);
       const me = this.world.myPlayer();
       this.hud.setVitals(this.world.me.hp, this.world.me.shield, this.world.me.ammo, me?.supply ?? 0);
+      if (me) this.hud.setAmmo(me.mag, me.reserve);
+      const rl = this.reloadEnd > now ? (now - this.reloadStart) / Math.max(1, this.reloadEnd - this.reloadStart) : null;
+      this.hud.setReloading(rl);
+      if (this.chargeStart) {
+        const k = Math.min(1, (now - this.chargeStart) / GAME.WEAPONS.sniper.CHARGE_MS);
+        this.hud.setCharge(k);
+        if (now - this.lastChargeTone > 90) {
+          this.lastChargeTone = now;
+          audio.charge(k);
+        }
+      }
       this.hud.setCompass(heading);
       this.hud.setCrosshairHot(!!this.aimTarget());
       this.hud.drawRadar(this.world, heading);

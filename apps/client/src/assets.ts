@@ -69,6 +69,36 @@ export interface WeaponPreset {
 }
 
 export const WEAPON_PRESETS: Record<WeaponId, WeaponPreset> = {
+  pistol: {
+    model: "pistol",
+    name: "Искра",
+    pos: [0.22, -0.22, -0.42],
+    rot: [0, Math.PI, 0],
+    scale: 0.55,
+    muzzle: [0, 0.22, -0.25],
+    kickBack: 0.04,
+    kickPitch: 0.08,
+    camKick: 0.6,
+    boltColor: 0x7dd3fc,
+    flash: "muzzle5",
+    sfx: "laser1",
+    sfxRate: 1.5,
+  },
+  sniper: {
+    model: "sniper",
+    name: "Горизонт",
+    pos: [0.24, -0.25, -0.55],
+    rot: [0, Math.PI, 0],
+    scale: 0.6,
+    muzzle: [0, 0.3, -0.75],
+    kickBack: 0.12,
+    kickPitch: 0.16,
+    camKick: 2.5,
+    boltColor: 0xc4b5fd,
+    flash: "muzzle1",
+    sfx: "zap",
+    sfxRate: 0.6,
+  },
   blaster: {
     model: "rifle",
     name: "Гроза",
@@ -143,7 +173,7 @@ export function sprite(id: SpriteId): THREE.Texture {
 
 /** Warm the caches for everything the first fight needs. Safe to call multiple times. */
 export function preload(): Promise<void> {
-  const models: ModelId[] = ["rifle", "rocket", "turret", "drone", "crate", "rocketAmmo"];
+  const models: ModelId[] = ["rifle", "pistol", "sniper", "rocket", "turret", "drone", "crate", "rocketAmmo"];
   (Object.keys(SPRITES) as SpriteId[]).forEach(sprite);
   return Promise.all(models.map((m) => loadModel(m).catch(() => null))).then(() => undefined);
 }
