@@ -284,7 +284,7 @@ export function catalogCone(w: WeaponDef, dist: number, bloom: number, zoomed: b
 /** Time-to-kill vs 100 HP in seconds (rough, ignores GPS misses). */
 export function ttk(w: WeaponDef): number {
   const cluster = w.trait === "cluster" ? 2.5 : 1;
-  const perTrigger = w.damage * Math.max(1, w.burst) * Math.max(1, w.pellets) * cluster;
+  const perTrigger = w.damage * Math.max(1, w.burst) * Math.max(1, w.pellets) * cluster + w.burnS * 3;
   const shots = Math.ceil(100 / Math.max(1, perTrigger));
   return ((shots - 1) * w.cooldownMs) / 1000;
 }
