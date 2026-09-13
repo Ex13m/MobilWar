@@ -357,6 +357,7 @@ export class Room extends DurableObject<Env> {
         phaseEndsAt: 0,
         score: { red: 0, blue: 0 },
         playerCount: 0,
+        bases: { red: { x: 0, z: -cfg.radiusM * 0.55 }, blue: { x: 0, z: cfg.radiusM * 0.55 } },
         updatedAt: now,
       };
       rooms[id] = info;
