@@ -6,3 +6,4 @@ export * from "./filters.js";
 export * from "./anticheat.js";
 export * from "./ids.js";
 export * from "./weapons.js";
+export * from "./arena.js";

@@ -26,8 +26,14 @@ export interface HitCandidate {
  * the disc subtends atan(R/dist) — so close targets are "bigger".
  * R = base + 0.5*(shooterAcc + targetAcc), clamped so the cone never exceeds 45°.
  */
-export function effectiveHalfAngle(dist: number, shooterAcc: number, targetAcc: number, weaponCone: number = GAME.CONE_HALF_ANGLE_DEG): number {
-  const R = GAME.HIT_RADIUS_BASE_M + 0.5 * (clampAcc(shooterAcc) + clampAcc(targetAcc));
+export function effectiveHalfAngle(
+  dist: number,
+  shooterAcc: number,
+  targetAcc: number,
+  weaponCone: number = GAME.CONE_HALF_ANGLE_DEG,
+  hitRadiusM: number = GAME.HIT_RADIUS_BASE_M,
+): number {
+  const R = hitRadiusM + 0.5 * (clampAcc(shooterAcc) + clampAcc(targetAcc));
   const fromRadius = (Math.atan2(R, Math.max(dist, 0.5)) * 180) / Math.PI;
   return Math.min(45, Math.max(weaponCone, fromRadius));
 }
@@ -50,6 +56,7 @@ export function resolveShot(
   targets: Target[],
   rangeM: number = GAME.RIFLE_RANGE_M,
   cone: ConeFn = GAME.CONE_HALF_ANGLE_DEG,
+  hitRadiusM: number = GAME.HIT_RADIUS_BASE_M,
 ): HitCandidate | null {
   let best: HitCandidate | null = null;
   for (const t of targets) {
@@ -57,7 +64,7 @@ export function resolveShot(
     if (dist > rangeM || dist < 0.3) continue;
     const brg = bearingLocal(shooter, t);
     const angErr = Math.abs(angleDiff(heading, brg));
-    const allowed = effectiveHalfAngle(dist, shooter.acc, t.acc, typeof cone === "function" ? cone(dist) : cone);
+    const allowed = effectiveHalfAngle(dist, shooter.acc, t.acc, typeof cone === "function" ? cone(dist) : cone, hitRadiusM);
     if (angErr > allowed) continue;
     // Prefer targets closer to the centre line, then nearer ones.
     const score = (1 - angErr / allowed) * 0.7 + (1 - dist / rangeM) * 0.3;

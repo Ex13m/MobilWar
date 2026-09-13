@@ -108,7 +108,51 @@ export const GAME = {
   DEFAULT_ZONE_RADIUS_M: 150,
   /** Client interpolation buffer (ms). */
   INTERP_DELAY_MS: 250,
+  /**
+   * FPS / virtual arena: players move with a joystick or WASD instead of GPS.
+   * Hits still use the 2D cone model, but the "GPS disc" around a target shrinks to
+   * HIT_RADIUS_M (an avatar is ~0.5 m wide; 0.9 m keeps mobile aiming forgiving).
+   */
+  FPS: {
+    /** Walk / sprint speed (m/s) applied by the client; server rejects faster moves. */
+    SPEED_MPS: 4.5,
+    SPRINT_MPS: 7,
+    MAX_SPEED_MPS: 9,
+    /** Virtual position upload rate (Hz). */
+    POS_HZ: 10,
+    HIT_RADIUS_M: 0.9,
+    /** Default zone radius for arenas (m). */
+    ARENA_RADIUS_M: 60,
+    /** Countdown before an arena round starts (ms) and pause between rounds. */
+    COUNTDOWN_MS: 3000,
+    RESTART_MS: 8000,
+    /** Cover blocks per 100 m of radius (clamped 6..40). */
+    COVER_PER_100M: 30,
+    /** Collision radius of a cover block for movement (m). */
+    COVER_COLLIDE_M: 1.4,
+    /** Player collision radius (m). */
+    PLAYER_RADIUS_M: 0.4,
+  },
+  /** Server bots (arena practice). */
+  BOT: {
+    SPEED_MPS: 3.6,
+    SIGHT_M: 55,
+    /** Preferred engagement distance (m); bots strafe inside it and close in outside it. */
+    ENGAGE_M: 14,
+    /** Aim noise (deg) at first sight, decaying to AIM_NOISE_MIN over AIM_SETTLE_MS. */
+    AIM_NOISE_DEG: 14,
+    AIM_NOISE_MIN: 2.5,
+    AIM_SETTLE_MS: 1800,
+    /** Delay between spotting a target and the first shot (ms). */
+    REACTION_MS: 450,
+    /** Think interval (ms) for re-planning. */
+    THINK_MS: 400,
+    MAX_PER_ROOM: 12,
+  },
 } as const;
+
+/** Origin used by virtual arenas (no real place). */
+export const ARENA_ORIGIN = { lat: 0, lon: 0 } as const;
 
 export type WeaponId = keyof typeof GAME.WEAPONS;
 export const WEAPON_IDS = ["pistol", "blaster", "sniper", "rocket"] as const satisfies readonly WeaponId[];

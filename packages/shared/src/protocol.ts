@@ -3,7 +3,7 @@ import type { AvatarId, Team, WeaponId } from "./constants.js";
 import type { Loadout } from "./weapons.js";
 
 export type GameMode = "tdm" | "ctf" | "koth" | "infection" | "turret_defense";
-export type PlayMode = "ar" | "screenless" | "referee";
+export type PlayMode = "ar" | "screenless" | "referee" | "fps";
 /** Placeable (turret/barrier/drone/medkit), mode objects (flag) and pickups. */
 export type ObjectKind = "turret" | "barrier" | "drone" | "medkit" | "flag" | "ammo" | "shield" | "overcharge" | "supply";
 export const PICKUP_KINDS = ["medkit", "ammo", "shield", "overcharge", "supply"] as const;
@@ -57,6 +57,8 @@ export interface PlayerPublic {
   protectedUntil: number;
   /** Epoch ms when respawn becomes possible (0 when alive). */
   respawnAt: number;
+  /** Server-controlled bot (arena / FPS practice). */
+  bot?: boolean;
 }
 
 export interface Projectile {
@@ -112,6 +114,10 @@ export interface RoomInfo {
   playerCount: number;
   /** Team bases (local coords). Dead players respawn by walking to their base. */
   bases: Record<Team, BaseInfo>;
+  /** Virtual arena: no GPS, players move with FPS controls (`vpos`), server bots allowed. */
+  arena?: boolean;
+  /** Number of server bots in the room. */
+  bots?: number;
 }
 
 export interface Snapshot {
@@ -142,6 +148,19 @@ export interface PosMsg {
   lat: number;
   lon: number;
   acc: number;
+  heading: number;
+  /** Client monotonic time (ms). */
+  ct: number;
+}
+
+/**
+ * Virtual position (FPS / arena play mode): local ENU metres relative to room.origin.
+ * Accepted only from players who joined with playMode "fps"; speed-checked server-side.
+ */
+export interface VirtualPosMsg {
+  type: "vpos";
+  x: number;
+  z: number;
   heading: number;
   /** Client monotonic time (ms). */
   ct: number;
@@ -191,8 +210,10 @@ export interface PlaceObjectMsg {
 
 export interface RefereeCmdMsg {
   type: "ref";
-  cmd: "start" | "stop" | "reset" | "kick" | "set_mode" | "set_zone";
+  cmd: "start" | "stop" | "reset" | "kick" | "set_mode" | "set_zone" | "bots";
   playerId?: string;
+  /** For cmd "bots": desired number of server bots. */
+  count?: number;
   mode?: GameMode;
   origin?: LatLon;
   radiusM?: number;
@@ -208,8 +229,13 @@ export interface CreateRoomMsg {
   type: "create_room";
   name: string;
   mode: GameMode;
-  origin: LatLon;
+  /** Optional for arena rooms (defaults to ARENA_ORIGIN). */
+  origin?: LatLon;
   radiusM: number;
+  /** Virtual arena (FPS): no GPS needed, bots allowed, auto-start. */
+  arena?: boolean;
+  /** Server bots to add on creation (arena only). */
+  bots?: number;
 }
 
 export interface ListRoomsMsg {
@@ -220,6 +246,7 @@ export interface ListRoomsMsg {
 export type ClientMsg =
   | JoinMsg
   | PosMsg
+  | VirtualPosMsg
   | ShootMsg
   | SelectWeaponMsg
   | ReloadMsg
