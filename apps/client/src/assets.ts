@@ -179,8 +179,8 @@ export function sprite(id: SpriteId): THREE.Texture {
 
 /** Per-model viewmodel scale so different packs look the same size in hand. */
 export const MODEL_SCALE: Record<ModelId, number> = {
-  pistol: 0.55, pistol2: 0.5, pistol3: 0.9, rifle: 0.6, rifle2: 0.55, rifle3: 0.35, sniper: 0.6, sniper2: 0.7, minigun: 0.9,
-  rocket: 0.75, rocket2: 0.4, rocketAmmo: 1, clip: 1, crate: 1, turret: 1, drone: 1,
+  pistol: 0.55, pistol2: 0.5, pistol3: 0.9, rifle: 0.6, rifle2: 0.55, rifle3: 0.16, sniper: 0.6, sniper2: 0.7, minigun: 0.9,
+  rocket: 0.75, rocket2: 0.18, rocketAmmo: 1, clip: 1, crate: 1, turret: 1, drone: 1,
 };
 
 /** Warm the caches for everything the first fight needs. Safe to call multiple times. */
