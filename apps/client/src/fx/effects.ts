@@ -63,11 +63,11 @@ export class Effects {
 
   /** A glowing bolt flying from → to (world coords). Speed in m/s. */
   bolt(from: THREE.Vector3, to: THREE.Vector3, color: number, speed = 70, onArrive?: () => void): void {
-    const mat = new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.95, blending: THREE.AdditiveBlending, depthWrite: false, toneMapped: false });
+    const mat = new THREE.MeshBasicMaterial({ color: new THREE.Color(color).multiplyScalar(3.5), transparent: true, opacity: 0.95, blending: THREE.AdditiveBlending, depthWrite: false, toneMapped: false });
     const mesh = new THREE.Mesh(this.boltGeo, mat);
     mesh.position.copy(from);
     mesh.lookAt(to);
-    const glow = new THREE.Sprite(new THREE.SpriteMaterial({ map: this.glowTex, color, transparent: true, blending: THREE.AdditiveBlending, depthWrite: false, opacity: 0.9 }));
+    const glow = new THREE.Sprite(new THREE.SpriteMaterial({ map: this.glowTex, color: new THREE.Color(color).multiplyScalar(2.5), transparent: true, blending: THREE.AdditiveBlending, depthWrite: false, opacity: 0.9, toneMapped: false }));
     glow.scale.set(0.7, 0.7, 1);
     mesh.add(glow);
     let light: THREE.PointLight | null = null;
@@ -97,7 +97,7 @@ export class Effects {
   }
 
   explosion(pos: THREE.Vector3, radius: number): void {
-    const core = new THREE.Mesh(this.sphereGeo, new THREE.MeshBasicMaterial({ color: 0xff7a1f, transparent: true, opacity: 0.9, blending: THREE.AdditiveBlending, depthWrite: false, toneMapped: false }));
+    const core = new THREE.Mesh(this.sphereGeo, new THREE.MeshBasicMaterial({ color: new THREE.Color(4, 2.2, 0.8), transparent: true, opacity: 0.9, blending: THREE.AdditiveBlending, depthWrite: false, toneMapped: false }));
     core.position.copy(pos).setY(pos.y + 0.6);
     const ring = new THREE.Mesh(this.ringGeo, new THREE.MeshBasicMaterial({ color: 0xffa53b, transparent: true, opacity: 0.8, side: THREE.DoubleSide, blending: THREE.AdditiveBlending, depthWrite: false, toneMapped: false }));
     ring.rotation.x = -Math.PI / 2;

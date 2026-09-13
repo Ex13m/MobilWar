@@ -182,3 +182,14 @@ h2 { font-size: 18px; margin: 0 0 8px; }
 @keyframes burn { from { opacity: .35; } to { opacity: .7; } }
 .hud .stunfx { position: absolute; inset: 0; pointer-events: none; opacity: 0; background: repeating-linear-gradient(0deg, rgba(56,189,248,.18) 0 2px, transparent 2px 6px); }
 .hud .stunfx.on { opacity: 1; }
+
+/* ---- HUD weapon picker strip ---- */
+.hud .picker { position: absolute; left: 0; right: 0; bottom: 172px; background: rgba(8,10,14,.9); border-top: 1px solid #1f2937; border-bottom: 1px solid #1f2937; padding: 6px 8px 2px; max-height: 46vh; overflow: hidden; }
+.hud .picker-head { display: flex; justify-content: space-between; align-items: center; padding: 0 4px 4px; font-size: 13px; color: var(--muted); }
+.hud .picker-close { background: none; border: 0; color: var(--fg); font-size: 18px; padding: 4px 8px; }
+.hud .picker .lo-head { display: none; }
+.hud .picker .lo-card { flex-basis: 150px; padding: 8px; }
+.hud .picker .lo-card small { min-height: 24px; }
+.hud .wprev, .hud .wnext { width: 40px; min-width: 40px; flex: 0 0 40px; background: var(--panel); border: 2px solid #374151; border-radius: 12px; color: var(--fg); font-size: 22px; line-height: 1; }
+.hud .wpick { flex: 1; background: var(--panel); border: 2px solid var(--accent); border-radius: 12px; color: var(--accent); min-height: 40px; font-size: 13px; font-weight: 700; }
+.hud .reload, .hud .zoom { flex: 0 0 48px; font-size: 18px; }

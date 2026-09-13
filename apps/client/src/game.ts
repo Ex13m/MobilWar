@@ -9,10 +9,10 @@ import { Screenless } from "./screenless.js";
 import type { Sensors } from "./sensors.js";
 import { WorldState } from "./state.js";
 import { Hud, fmtTime } from "./ui/hud.js";
-import type { Profile } from "./storage.js";
+import { saveProfile, type Profile } from "./storage.js";
 import { FX } from "./fx/effects.js";
 import { WEAPON_PRESETS, preload } from "./assets.js";
-import { renderLoadout } from "./ui/loadout.js";
+import { renderLoadout, cycleWeapon } from "./ui/loadout.js";
 import { weaponById, SLOTS, type Slot } from "@mobilwar/shared";
 
 export interface GameOptions {
@@ -81,6 +81,8 @@ export class Game {
         onFireEnd: () => this.triggerEnd(),
         onFireRocket: () => this.fire("rocket"),
         onWeapon: (w) => this.selectWeapon(w),
+        onPick: (slot, id) => this.equip(slot, id),
+        onCycle: (dir) => this.equip(this.weapon, cycleWeapon(this.o.profile.loadout, this.weapon, dir)),
         onReload: () => this.reload(),
         onZoom: () => this.toggleZoom(),
         onPlace: (k) => this.place(k),
@@ -214,18 +216,25 @@ export class Game {
     this.net.send({ type: "reload" });
   }
 
+  /** Equip a catalog variant into a slot: server, profile, viewmodel, HUD labels. */
+  private equip(slot: WeaponId, id: string): void {
+    this.o.profile.loadout[slot] = id;
+    saveProfile(this.o.profile);
+    this.net.send({ type: "loadout", slot, weaponId: id });
+    this.hud?.setLoadout(this.o.profile.loadout);
+    if (slot === this.weapon) void this.scene?.viewmodel.setWeapon(slot, id);
+    const w = weaponById(id);
+    if (w) this.hud?.banner(`${w.name}: ${w.blurb}`, "good", 1800);
+    this.o.audio.weaponSwitch();
+  }
+
   /** In-game drawer: weapon catalog per slot (for field balance testing) + exit. */
   private openMenu(): void {
     const root = this.o.root;
     if (root.querySelector(".drawer")) return;
     root.insertAdjacentHTML("beforeend", `<div class="drawer"><div class="row"><button class="btn secondary" id="dr-close">← В бой</button><button class="btn danger" id="dr-exit">Выйти из зоны</button></div><div id="dr-loadout"></div></div>`);
     const drawer = root.querySelector<HTMLElement>(".drawer")!;
-    const off = renderLoadout(drawer.querySelector("#dr-loadout")!, this.o.profile.loadout, (slot, id) => {
-      this.net.send({ type: "loadout", slot, weaponId: id });
-      this.hud?.setLoadout(this.o.profile.loadout);
-      if (slot === this.weapon) void this.scene?.viewmodel.setWeapon(slot, id);
-      this.o.audio.weaponSwitch();
-    });
+    const off = renderLoadout(drawer.querySelector("#dr-loadout")!, this.o.profile.loadout, (slot, id) => this.equip(slot, id));
     drawer.querySelector("#dr-close")!.addEventListener("click", () => {
       off();
       drawer.remove();
@@ -348,6 +357,7 @@ export class Game {
         else this.o.audio.gotHit(dmgStr);
         this.hud?.flash(Math.min(0.6, 0.15 + dmgStr / 60));
         this.scene?.addShake(0.6 + dmgStr / 25);
+        this.scene?.hitPulse(Math.min(1, 0.4 + dmgStr / 40));
         this.world.me.hp = m.hp;
         break;
       }
@@ -461,6 +471,7 @@ export class Game {
         if (this.scene) {
           this.scene.fx.explosion(new THREE.Vector3(x, 0, z), r);
           this.scene.addShake(Math.max(0, 3 - d / 6));
+          this.scene.flash(Math.max(0, 1 - d / 25));
         }
         const victims = (data?.victims as Array<{ id: string; damage: number }> | undefined) ?? [];
         if (data?.by === this.world.myId && victims.length) {
@@ -572,7 +583,8 @@ export class Game {
 
     if (this.scene && this.hud) {
       this.scene.updateView(sensors.orient, this.world.me, heading);
-      this.scene.viewmodel.update(this.scene ? Math.min(0.05, 1 / 60) : 0.016, this.speed);
+      this.scene.viewmodel.update(Math.min(0.05, 1 / 60), this.speed);
+      this.scene.setGrade({ low: this.world.me.alive && this.world.me.hp <= 25 ? 1 : 0, dead: this.world.me.alive ? 0 : 1, stun: (this.world.myPlayer()?.stunnedUntil ?? 0) > serverNow ? 1 : 0 });
       this.scene.sync(this.world, serverNow);
       this.scene.render();
       const room = this.world.room;

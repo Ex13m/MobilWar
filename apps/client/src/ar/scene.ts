@@ -1,5 +1,7 @@
 import * as THREE from "three";
-import { EffectComposer, EffectPass, RenderPass, SelectiveBloomEffect, BlendFunction } from "postprocessing";
+import { EffectComposer, EffectPass, RenderPass, BloomEffect, SMAAEffect, SMAAPreset, ToneMappingEffect, ToneMappingMode, BlendFunction } from "postprocessing";
+import { RoomEnvironment } from "three/examples/jsm/environments/RoomEnvironment.js";
+import { GradeEffect } from "../fx/grade.js";
 import { GAME, TEAM_COLORS, type Team, type WorldObject } from "@mobilwar/shared";
 import type { RemotePlayer, WorldState } from "../state.js";
 import type { Orientation } from "../sensors.js";
@@ -48,7 +50,10 @@ export class ArScene {
   private xrSession: XRSession | null = null;
   private xrYawOffset = 0;
   private composer: EffectComposer | null = null;
-  private bloom: SelectiveBloomEffect | null = null;
+  private bloom: BloomEffect | null = null;
+  private grade: GradeEffect | null = null;
+  private flashV = 0;
+  private hitV = 0;
   private bgScene = new THREE.Scene();
   private bgCam = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
   private bgMesh: THREE.Mesh | null = null;
@@ -69,24 +74,35 @@ export class ArScene {
 
   constructor(canvas: HTMLCanvasElement) {
     const lowEnd = (navigator.hardwareConcurrency ?? 8) <= 4 || (navigator as { deviceMemory?: number }).deviceMemory !== undefined && ((navigator as { deviceMemory?: number }).deviceMemory ?? 8) <= 3;
-    this.quality = lowEnd ? "low" : "high";
+    const forced = new URLSearchParams(location.search).get("q");
+    this.quality = forced === "high" || forced === "low" ? forced : lowEnd ? "low" : "high";
     this.renderer = new THREE.WebGLRenderer({ canvas, alpha: false, antialias: this.quality === "high", powerPreference: "high-performance", stencil: false, depth: true });
-    this.renderer.setPixelRatio(Math.min(this.quality === "high" ? 2 : 1.25, window.devicePixelRatio));
+    this.renderer.setPixelRatio(Math.min(this.quality === "high" ? 1.5 : 1.25, window.devicePixelRatio));
     this.renderer.setClearColor(0x0b0f14, 1);
     this.renderer.xr.enabled = true;
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
     this.renderer.toneMappingExposure = 1.05;
+    this.renderer.outputColorSpace = THREE.SRGBColorSpace;
     this.camera = new THREE.PerspectiveCamera(65, 1, 0.05, 400);
     this.camera.position.set(0, EYE_HEIGHT, 0);
     this.scene.add(this.camera);
     this.scene.add(this.world);
-    this.scene.add(new THREE.HemisphereLight(0xffffff, 0x334155, 1.3));
-    const sun = new THREE.DirectionalLight(0xffffff, 1.4);
+    this.scene.add(new THREE.HemisphereLight(0xffffff, 0x334155, 1.1));
+    const sun = new THREE.DirectionalLight(0xffffff, 1.3);
     sun.position.set(20, 40, 10);
     this.scene.add(sun);
+    // Image-based lighting so metals and plastics on the models read as materials, not flat colour.
+    const pmrem = new THREE.PMREMGenerator(this.renderer);
+    this.scene.environment = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
+    this.scene.environmentIntensity = 0.4;
+    pmrem.dispose();
+    // Faint fill on the camera so the weapon reads in the dark (BLACK RIG pattern).
+    const fill = new THREE.PointLight(0x9fb6d6, 1.6, 2.5, 2);
+    fill.position.set(0.32, 0.25, -0.15);
+    this.camera.add(fill);
     this.fx = new Effects(this.world);
     this.fx.particles.points.layers.enable(BLOOM_LAYER);
-    this.viewmodel = new Viewmodel(this.camera);
+    this.viewmodel = new Viewmodel(this.camera, this.scene);
     this.setupComposer();
     this.resize();
     window.addEventListener("resize", () => this.resize());
@@ -94,26 +110,42 @@ export class ArScene {
 
   private setupComposer(): void {
     if (this.quality === "low") return;
-    const composer = new EffectComposer(this.renderer, { multisampling: 0 });
+    const composer = new EffectComposer(this.renderer, { multisampling: 0, frameBufferType: THREE.HalfFloatType });
     const bgPass = new RenderPass(this.bgScene, this.bgCam);
     const mainPass = new RenderPass(this.scene, this.camera);
     mainPass.clear = false;
-    const bloom = new SelectiveBloomEffect(this.scene, this.camera, {
+    // Bloom only on HDR pixels (> 1.0): bolts, flashes, beacons. The camera image stays untouched.
+    const bloom = new BloomEffect({
       blendFunction: BlendFunction.ADD,
       mipmapBlur: true,
-      luminanceThreshold: 0.3,
-      luminanceSmoothing: 0.2,
-      intensity: 1.6,
-      radius: 0.7,
-      levels: 4,
+      luminanceThreshold: 1.0,
+      luminanceSmoothing: 0.05,
+      intensity: 0.7,
+      radius: 0.5,
+      levels: 5,
     });
-    bloom.selection.layer = BLOOM_LAYER;
-    bloom.ignoreBackground = true;
+    const tone = new ToneMappingEffect({ mode: ToneMappingMode.ACES_FILMIC });
+    const smaa = new SMAAEffect({ preset: SMAAPreset.LOW });
+    const grade = new GradeEffect();
     composer.addPass(bgPass);
     composer.addPass(mainPass);
-    composer.addPass(new EffectPass(this.camera, bloom));
+    composer.addPass(new EffectPass(this.camera, bloom, tone, smaa, grade));
     this.composer = composer;
     this.bloom = bloom;
+    this.grade = grade;
+  }
+
+  /** Screen-space state for the grade pass (hit pulse, low health, dead, stun). */
+  setGrade(v: { low?: number; dead?: number; stun?: number }): void {
+    this.grade?.set(v);
+  }
+  /** Warm full-screen flash (explosions nearby), decays over ~0.5 s. */
+  flash(strength: number): void {
+    this.flashV = Math.min(1, this.flashV + strength);
+  }
+  /** Red hit pulse, decays over ~0.6 s. */
+  hitPulse(strength: number): void {
+    this.hitV = Math.min(1, this.hitV + strength);
   }
 
   /** Use a <video> as the AR background (drawn cover-fit under the 3D world). */
@@ -438,7 +470,7 @@ export class ArScene {
       case "supply": {
         const color = o.kind === "shield" ? FX.shield : o.kind === "overcharge" ? FX.blasterYellow : 0xa78bfa;
         const geo = o.kind === "shield" ? new THREE.OctahedronGeometry(0.35) : o.kind === "overcharge" ? new THREE.TetrahedronGeometry(0.4) : new THREE.BoxGeometry(0.5, 0.5, 0.5);
-        const mesh = new THREE.Mesh(geo, new THREE.MeshStandardMaterial({ color, emissive: color, emissiveIntensity: 0.8, roughness: 0.3 }));
+        const mesh = new THREE.Mesh(geo, new THREE.MeshStandardMaterial({ color, emissive: color, emissiveIntensity: 2.2, roughness: 0.3 }));
         mesh.layers.enable(BLOOM_LAYER);
         holder.add(mesh);
         holder.userData.pickup = true;
@@ -456,7 +488,7 @@ export class ArScene {
       m.rotation.y = Math.PI;
       g.add(m);
     });
-    const glow = new THREE.Sprite(new THREE.SpriteMaterial({ map: sprite("flare"), color: 0xffb060, transparent: true, blending: THREE.AdditiveBlending, depthWrite: false }));
+    const glow = new THREE.Sprite(new THREE.SpriteMaterial({ map: sprite("flare"), color: new THREE.Color(3.5, 2.2, 0.9), transparent: true, blending: THREE.AdditiveBlending, depthWrite: false, toneMapped: false }));
     glow.scale.set(0.9, 0.9, 1);
     glow.position.z = 0.35;
     glow.layers.enable(BLOOM_LAYER);
@@ -469,7 +501,7 @@ export class ArScene {
   private buildBeacon(color: number): THREE.Group {
     const g = new THREE.Group();
     g.add(ring(color, 6));
-    const pillar = new THREE.Mesh(new THREE.CylinderGeometry(0.25, 0.5, 14, 12, 1, true), new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.35, side: THREE.DoubleSide, blending: THREE.AdditiveBlending, depthWrite: false }));
+    const pillar = new THREE.Mesh(new THREE.CylinderGeometry(0.25, 0.5, 14, 12, 1, true), new THREE.MeshBasicMaterial({ color: new THREE.Color(color).multiplyScalar(2.5), transparent: true, opacity: 0.35, side: THREE.DoubleSide, blending: THREE.AdditiveBlending, depthWrite: false, toneMapped: false }));
     pillar.position.y = 7;
     pillar.layers.enable(BLOOM_LAYER);
     g.add(pillar);
@@ -500,6 +532,9 @@ export class ArScene {
     this.lastDt = dt;
     this.fx.update(dt);
     this.shake = Math.max(0, this.shake - dt * 8);
+    this.flashV = Math.max(0, this.flashV - dt * 2.2);
+    this.hitV = Math.max(0, this.hitV - dt * 1.8);
+    this.grade?.set({ flash: this.flashV, hit: this.hitV });
     if (this.mode === "ar-lite" && this.composer) this.composer.render(dt);
     else {
       if (this.mode === "ar-lite" && this.bgMesh) {
@@ -533,7 +568,7 @@ function ring(color: number, r: number): THREE.Mesh {
 }
 
 function beam(color: number): THREE.Mesh {
-  const m = new THREE.Mesh(new THREE.CylinderGeometry(0.08, 0.25, 30, 8, 1, true), new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.25, side: THREE.DoubleSide, blending: THREE.AdditiveBlending, depthWrite: false }));
+  const m = new THREE.Mesh(new THREE.CylinderGeometry(0.08, 0.25, 30, 8, 1, true), new THREE.MeshBasicMaterial({ color: new THREE.Color(color).multiplyScalar(2.5), transparent: true, opacity: 0.25, side: THREE.DoubleSide, blending: THREE.AdditiveBlending, depthWrite: false, toneMapped: false }));
   m.position.y = 15;
   m.layers.enable(BLOOM_LAYER);
   return m;

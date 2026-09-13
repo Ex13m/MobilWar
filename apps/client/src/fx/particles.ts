@@ -43,7 +43,7 @@ void main() {
   vec4 t = texture2D(uTex, gl_PointCoord);
   float a = t.a * smoothstep(0.0, 0.2, vLife) * vLife;
   if (a < 0.01) discard;
-  gl_FragColor = vec4(vColor * t.rgb, a);
+  gl_FragColor = vec4(vColor * t.rgb * 1.6, a);
 }`;
 
 export function softSpriteTexture(size = 64): THREE.Texture {

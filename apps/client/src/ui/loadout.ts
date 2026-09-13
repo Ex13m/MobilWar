@@ -10,8 +10,9 @@ const TRAIT_RU: Record<string, string> = {
  * Loadout picker: one horizontally scrollable row per slot with 30 cards.
  * Tap a card to equip; `onChange` fires with the slot and weapon id.
  */
-export function renderLoadout(root: HTMLElement, loadout: Loadout, onChange: (slot: Slot, id: string) => void): () => void {
-  root.innerHTML = SLOTS.map((slot) => `
+export function renderLoadout(root: HTMLElement, loadout: Loadout, onChange: (slot: Slot, id: string) => void, only?: Slot[]): () => void {
+  const slots = only ?? [...SLOTS];
+  root.innerHTML = slots.map((slot) => `
     <div class="lo-slot" data-slot="${slot}">
       <div class="lo-head"><b>${SLOT_NAMES[slot]}</b><span class="lo-cur">${esc(nameOf(loadout[slot]))}</span></div>
       <div class="lo-row">${WEAPON_CATALOG[slot].map((w, i) => card(w, i + 1, loadout[slot] === w.id)).join("")}</div>
@@ -31,6 +32,14 @@ export function renderLoadout(root: HTMLElement, loadout: Loadout, onChange: (sl
   // scroll each row to its active card
   root.querySelectorAll<HTMLElement>(".lo-card.active").forEach((c) => c.scrollIntoView({ block: "nearest", inline: "center" }));
   return () => root.removeEventListener("click", handler);
+}
+
+export function cycleWeapon(loadout: Loadout, slot: Slot, dir: 1 | -1): string {
+  const list = WEAPON_CATALOG[slot];
+  const i = list.findIndex((w) => w.id === loadout[slot]);
+  const n = (i + dir + list.length) % list.length;
+  loadout[slot] = list[n]!.id;
+  return list[n]!.id;
 }
 
 function nameOf(id: string): string {

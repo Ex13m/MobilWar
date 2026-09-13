@@ -1,4 +1,5 @@
 import { GAME, weaponById, type Loadout, type ObjectKind, type WeaponId } from "@mobilwar/shared";
+import { renderLoadout } from "./loadout.js";
 import type { WorldState } from "../state.js";
 
 export interface HudCallbacks {
@@ -6,6 +7,9 @@ export interface HudCallbacks {
   onFireEnd(): void;
   onFireRocket(): void;
   onWeapon(w: WeaponId): void;
+  /** Picker on the HUD: a catalog variant chosen for a slot, or cycle ±1 in the active slot. */
+  onPick(slot: WeaponId, weaponId: string): void;
+  onCycle(dir: 1 | -1): void;
   onReload(): void;
   onZoom(): void;
   onPlace(kind: Extract<ObjectKind, "turret" | "barrier" | "drone" | "medkit">): void;
@@ -55,6 +59,7 @@ export class Hud {
           <button class="btn secondary" data-kind="barrier">🧱 Укрытие · 1</button>
           <button class="btn secondary" data-kind="medkit">➕ Аптечка · 1</button>
         </div>
+        <div class="picker" hidden><div class="picker-head"><span class="picker-title">Оружие</span><button class="picker-close">✕</button></div><div class="picker-body"></div></div>
         <div class="bottom">
           <div class="vitals">
             <div class="hpnum">100</div>
@@ -68,8 +73,11 @@ export class Hud {
             </div>
             <div class="weapons">
               <button class="place">🛠 <small class="supply">${GAME.SUPPLY_PER_PLAYER}</small></button>
-              <button class="reload">⟳ Перезарядка</button>
-              <button class="zoom" hidden>🔭 Зум</button>
+              <button class="wprev" title="Предыдущий вариант">‹</button>
+              <button class="wpick">Выбор ▾</button>
+              <button class="wnext" title="Следующий вариант">›</button>
+              <button class="reload">⟳</button>
+              <button class="zoom" hidden>🔭</button>
             </div>
           </div>
           <div class="firecol">
@@ -113,16 +121,54 @@ export class Hud {
     );
     this.el.querySelectorAll<HTMLButtonElement>(".wbtn").forEach((b) =>
       b.addEventListener("click", () => {
-        this.setWeapon(b.dataset.w as WeaponId);
-        cb.onWeapon(b.dataset.w as WeaponId);
+        const w = b.dataset.w as WeaponId;
+        if (b.classList.contains("active")) {
+          this.togglePicker(w);
+          return;
+        }
+        this.setWeapon(w);
+        cb.onWeapon(w);
       }),
     );
+    this.q(".wpick").addEventListener("click", () => this.togglePicker(this.activeSlot()));
+    this.q(".picker-close").addEventListener("click", () => this.togglePicker(null));
+    this.q(".wprev").addEventListener("click", () => cb.onCycle(-1));
+    this.q(".wnext").addEventListener("click", () => cb.onCycle(1));
+    this.cb = cb;
     this.q(".reload").addEventListener("click", () => cb.onReload());
     this.q(".zoom").addEventListener("click", () => cb.onZoom());
     this.q(".menu").addEventListener("click", () => cb.onMenu());
   }
 
+  private cb!: HudCallbacks;
+  private loadout: Loadout | null = null;
+  private pickerOff: (() => void) | null = null;
+  activeSlot(): WeaponId {
+    return (this.el.querySelector<HTMLButtonElement>(".wbtn.active")?.dataset.w as WeaponId) ?? "blaster";
+  }
+  /** Show the 30-card strip for a slot on the HUD (null = close). */
+  togglePicker(slot: WeaponId | null): void {
+    const p = this.q<HTMLElement>(".picker");
+    const body = this.q<HTMLElement>(".picker-body");
+    this.pickerOff?.();
+    this.pickerOff = null;
+    if (!slot || !this.loadout || (!p.hidden && p.dataset.slot === slot)) {
+      p.hidden = true;
+      body.innerHTML = "";
+      return;
+    }
+    p.hidden = false;
+    p.dataset.slot = slot;
+    const names: Record<WeaponId, string> = { pistol: "Пистолет", blaster: "Винтовка", sniper: "Снайперка", rocket: "Тяжёлое" };
+    this.q(".picker-title").textContent = `${names[slot]} · 30 вариантов`;
+    this.pickerOff = renderLoadout(body, this.loadout, (s, id) => {
+      this.setLoadout(this.loadout!);
+      this.cb.onPick(s, id);
+    }, [slot]);
+  }
+
   setLoadout(lo: Loadout): void {
+    this.loadout = lo;
     this.el.querySelectorAll<HTMLButtonElement>(".wbtn").forEach((b) => {
       const w = weaponById(lo[b.dataset.w as WeaponId]);
       if (w) {

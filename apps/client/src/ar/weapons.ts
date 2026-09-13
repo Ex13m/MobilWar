@@ -11,7 +11,7 @@ function tint(root: THREE.Object3D, color: number): void {
     if (!m.isMesh) return;
     const mat = (m.material as THREE.MeshStandardMaterial).clone();
     mat.emissive = c.clone();
-    mat.emissiveIntensity = 0.28;
+    mat.emissiveIntensity = 0.12;
     m.material = mat;
   });
 }
@@ -51,7 +51,15 @@ export class Viewmodel {
   private camPitch = new Spring(220, 28);
   private camYaw = new Spring(220, 28);
   private flash: THREE.Sprite;
+  private flash2: THREE.Sprite;
   private flashLight: THREE.PointLight;
+  private casings: THREE.InstancedMesh;
+  private casingState: Array<{ active: boolean; pos: THREE.Vector3; vel: THREE.Vector3; rot: number; life: number }> = [];
+  private casingIdx = 0;
+  private scene: THREE.Object3D;
+  private tmpM = new THREE.Matrix4();
+  private tmpQ = new THREE.Quaternion();
+  private tmpS = new THREE.Vector3(1, 1, 1);
   private flashUntil = 0;
   private switchT = 1; // 0..1 animation progress of "draw"
   private t = 0;
@@ -60,15 +68,32 @@ export class Viewmodel {
 
   private camera: THREE.PerspectiveCamera;
 
-  constructor(camera: THREE.PerspectiveCamera) {
+  constructor(camera: THREE.PerspectiveCamera, scene: THREE.Object3D) {
     this.camera = camera;
+    this.scene = scene;
     camera.add(this.root);
     this.root.add(this.holder);
-    this.flash = new THREE.Sprite(new THREE.SpriteMaterial({ map: sprite("muzzle3"), transparent: true, blending: THREE.AdditiveBlending, depthWrite: false, depthTest: false }));
+    // Two-layer muzzle flash (sharp shape + soft glow), HDR colours so bloom picks them up.
+    this.flash = new THREE.Sprite(new THREE.SpriteMaterial({ map: sprite("muzzle3"), transparent: true, blending: THREE.AdditiveBlending, depthWrite: false, depthTest: false, toneMapped: false }));
     this.flash.scale.set(0.35, 0.35, 1);
     this.flash.visible = false;
-    this.flashLight = new THREE.PointLight(0xffd23b, 0, 4, 2);
-    this.holder.add(this.flash, this.flashLight);
+    this.flash2 = new THREE.Sprite(new THREE.SpriteMaterial({ map: sprite("light"), transparent: true, blending: THREE.AdditiveBlending, depthWrite: false, depthTest: false, toneMapped: false }));
+    this.flash2.scale.set(0.7, 0.7, 1);
+    this.flash2.visible = false;
+    this.flashLight = new THREE.PointLight(0xffc27a, 0, 26, 2);
+    this.holder.add(this.flash, this.flash2, this.flashLight);
+    // Ejected casings: one InstancedMesh, pooled.
+    const geo = new THREE.CylinderGeometry(0.0045, 0.0045, 0.04, 6);
+    const mat = new THREE.MeshStandardMaterial({ color: 0xc9a24a, roughness: 0.3, metalness: 0.95 });
+    this.casings = new THREE.InstancedMesh(geo, mat, 32);
+    this.casings.frustumCulled = false;
+    for (let i = 0; i < 32; i++) {
+      this.casingState.push({ active: false, pos: new THREE.Vector3(), vel: new THREE.Vector3(), rot: 0, life: 0 });
+      this.tmpM.compose(new THREE.Vector3(0, -100, 0), this.tmpQ.identity(), this.tmpS);
+      this.casings.setMatrixAt(i, this.tmpM);
+    }
+    this.casings.instanceMatrix.needsUpdate = true;
+    scene.add(this.casings);
     void this.setWeapon("blaster");
   }
 
@@ -102,10 +127,12 @@ export class Viewmodel {
     const box2 = new THREE.Box3().setFromObject(m);
     const mz = new THREE.Vector3(0, (box2.min.y + box2.max.y) / 2 + 0.03, box2.min.z);
     this.flash.position.copy(mz);
+    this.flash2.position.copy(mz);
     this.flashLight.position.copy(mz);
     (this.flash.material as THREE.SpriteMaterial).map = sprite(p.flash);
     const color = def ? def.color : p.boltColor;
-    (this.flash.material as THREE.SpriteMaterial).color.set(color);
+    (this.flash.material as THREE.SpriteMaterial).color.set(color).multiplyScalar(4);
+    (this.flash2.material as THREE.SpriteMaterial).color.set(color).multiplyScalar(2.5);
     this.flashLight.color.set(color);
   }
 
@@ -118,9 +145,54 @@ export class Viewmodel {
     this.camYaw.kick((Math.random() - 0.5) * p.camKick * 6);
     this.flashUntil = this.t + 0.06;
     this.flash.visible = true;
+    this.flash2.visible = true;
     this.flash.material.rotation = Math.random() * Math.PI * 2;
     this.flash.scale.setScalar(0.3 + Math.random() * 0.15);
-    this.flashLight.intensity = 8;
+    this.flash2.scale.setScalar(0.6 + Math.random() * 0.2);
+    this.flashLight.intensity = 60;
+    if (this.weapon !== "rocket") this.ejectCasing();
+  }
+
+  private ejectCasing(): void {
+    const c = this.casingState[this.casingIdx]!;
+    this.casingIdx = (this.casingIdx + 1) % this.casingState.length;
+    // eject point: right side of the holder, in world space
+    const ej = new THREE.Vector3(0.08, 0.02, 0.05).applyMatrix4(this.holder.matrixWorld);
+    c.pos.copy(ej);
+    const right = new THREE.Vector3(1, 0, 0).applyQuaternion(this.camera.getWorldQuaternion(new THREE.Quaternion()));
+    const up = new THREE.Vector3(0, 1, 0);
+    c.vel.copy(right).multiplyScalar(1.6 + Math.random() * 0.8).addScaledVector(up, 1.8 + Math.random() * 0.8);
+    c.rot = Math.random() * Math.PI * 2;
+    c.life = 1.4;
+    c.active = true;
+  }
+
+  private updateCasings(dt: number): void {
+    let any = false;
+    for (let i = 0; i < this.casingState.length; i++) {
+      const c = this.casingState[i]!;
+      if (!c.active) continue;
+      any = true;
+      c.life -= dt;
+      c.vel.y -= 9.8 * dt;
+      c.pos.addScaledVector(c.vel, dt);
+      c.rot += dt * 12;
+      if (c.pos.y < 0.02) {
+        c.pos.y = 0.02;
+        c.vel.y *= -0.35;
+        c.vel.x *= 0.6;
+        c.vel.z *= 0.6;
+      }
+      if (c.life <= 0) {
+        c.active = false;
+        this.tmpM.compose(new THREE.Vector3(0, -100, 0), this.tmpQ.identity(), this.tmpS);
+      } else {
+        this.tmpQ.setFromEuler(new THREE.Euler(c.rot, c.rot * 0.7, 0));
+        this.tmpM.compose(c.pos, this.tmpQ, this.tmpS);
+      }
+      this.casings.setMatrixAt(i, this.tmpM);
+    }
+    if (any) this.casings.instanceMatrix.needsUpdate = true;
   }
 
   /** World position of the muzzle (for spawning bolts). */
@@ -158,8 +230,10 @@ export class Viewmodel {
     this.holder.rotation.z = Math.sin(this.t * 0.9) * 0.01;
     if (this.flash.visible && this.t > this.flashUntil) {
       this.flash.visible = false;
-      this.flashLight.intensity = 0;
+      this.flash2.visible = false;
     }
+    this.flashLight.intensity = Math.max(0, this.flashLight.intensity - dt * 400);
+    this.updateCasings(dt);
     this.root.visible = this.visible;
   }
 }
