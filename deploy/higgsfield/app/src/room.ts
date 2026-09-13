@@ -184,6 +184,7 @@ export class Room extends DurableObject<Env> {
             deviceId: conn.deviceId,
             team: msg.team,
             isReferee,
+            loadout: msg.loadout,
           });
         } catch (e) {
           conn.send({ type: "error", code: (e as Error).message, text: "Комната заполнена" });
@@ -214,6 +215,14 @@ export class Room extends DurableObject<Env> {
       case "zoom": {
         const p = game.players.get(conn.id);
         if (p) game.setZoom(p, !!msg.on);
+        return;
+      }
+      case "loadout": {
+        const p = game.players.get(conn.id);
+        if (p) {
+          if (!game.equip(p, msg.slot, String(msg.weaponId))) conn.send({ type: "error", code: "bad_weapon", text: "Нет такого оружия" });
+          else conn.send({ type: "snapshot", snap: game.snapshot() });
+        }
         return;
       }
       case "weapon": {

@@ -16,9 +16,14 @@ import {
   firstBarrierOnPath,
   rayEnd,
   splashDamage,
-  weaponCone,
   WEAPON_IDS,
   PICKUP_KINDS,
+  catalogCone,
+  defaultLoadout,
+  sanitizeLoadout,
+  weaponById,
+  type Loadout,
+  type WeaponDef,
   type WeaponId,
   type Projectile,
   type PickupKind,
@@ -56,6 +61,12 @@ export interface Player extends PlayerPublic {
   lastShotByWeapon: Record<WeaponId, number>;
   /** Server time when rifle bloom was last updated. */
   bloomAt: number;
+  /** Overheat seconds accumulated (rifle "overheat" trait) and lock time. */
+  heat: number;
+  heatAt: number;
+  lockUntil: number;
+  /** Burn: damage accumulator. */
+  burnAcc: number;
 }
 
 interface Turret extends WorldObject {
@@ -74,6 +85,7 @@ interface Drone extends WorldObject {
 
 interface ServerProjectile extends Projectile {
   lastT: number;
+  def: WeaponDef;
   /** Where the projectile will self-detonate (aimed distance). */
   maxDist: number;
   travelled: number;
@@ -167,7 +179,7 @@ export class Room {
 
   join(
     client: Client,
-    opts: { nick: string; avatar: AvatarId; playMode: PlayMode; deviceId: string; team?: Team; isReferee?: boolean },
+    opts: { nick: string; avatar: AvatarId; playMode: PlayMode; deviceId: string; team?: Team; isReferee?: boolean; loadout?: unknown },
   ): Player {
     if (this.players.has(client.id)) return this.players.get(client.id)!;
     const nonRef = [...this.players.values()].filter((p) => !p.isReferee).length;
@@ -203,13 +215,22 @@ export class Room {
       overchargeUntil: 0,
       protectedUntil: 0,
       lastShotByWeapon: { pistol: 0, blaster: 0, sniper: 0, rocket: 0 },
+      loadout: sanitizeLoadout(opts.loadout),
       mag: fullMags(),
       reserve: fullReserve(),
       reloadUntil: 0,
       bloom: 0,
       zoomed: false,
       bloomAt: 0,
+      stunnedUntil: 0,
+      burnUntil: 0,
+      heat: 0,
+      heatAt: 0,
+      lockUntil: 0,
+      burnAcc: 0,
     };
+    p.mag = fullMags(p.loadout);
+    p.reserve = fullReserve(p.loadout);
     this.players.set(p.id, p);
     this.lastActiveAt = this.now();
     return p;
@@ -295,13 +316,13 @@ export class Room {
     const t = this.now();
     this.settleReload(p, t);
     if (p.reloadUntil > t || !p.alive) return false;
-    const W = GAME.WEAPONS[weapon];
-    if (weapon === "rocket") return false; // rockets have no magazine; ammo comes from pickups
-    if (p.mag[weapon] >= W.MAG) return false;
+    const W = this.def(p, weapon);
+    if (weapon === "rocket" && W.reserve === 0) return false; // heavy ammo comes from pickups
+    if (p.mag[weapon] >= W.mag) return false;
     if (p.reserve[weapon] === 0) return false;
-    p.reloadUntil = t + W.RELOAD_MS;
+    p.reloadUntil = t + W.reloadMs;
     p.weapon = weapon;
-    this.broadcast({ type: "event", kind: "reload", data: { id: p.id, weapon, ms: W.RELOAD_MS } });
+    this.broadcast({ type: "event", kind: "reload", data: { id: p.id, weapon, ms: W.reloadMs } });
     return true;
   }
 
@@ -310,9 +331,8 @@ export class Room {
     if (!p.reloadUntil || t < p.reloadUntil) return;
     p.reloadUntil = 0;
     const w = p.weapon;
-    if (w === "rocket") return;
-    const W = GAME.WEAPONS[w];
-    const need = W.MAG - p.mag[w];
+    const W = this.def(p, w);
+    const need = W.mag - p.mag[w];
     const take = p.reserve[w] < 0 ? need : Math.min(need, p.reserve[w]);
     p.mag[w] += take;
     if (p.reserve[w] >= 0) p.reserve[w] -= take;
@@ -322,7 +342,13 @@ export class Room {
   private settleBloom(p: Player, t: number): void {
     const since = t - (p.bloomAt || t);
     const dt = Math.max(0, (since - 250) / 1000);
-    if (dt > 0) p.bloom = Math.max(0, p.bloom - GAME.WEAPONS.blaster.BLOOM_DECAY * dt);
+    if (dt > 0) p.bloom = Math.max(0, p.bloom - this.def(p, "blaster").bloomDecay * dt);
+    // overheat cools at 1 s of heat per second when not firing
+    const hs = Math.max(0, (t - (p.heatAt || t) - 250) / 1000);
+    if (hs > 0) {
+      p.heat = Math.max(0, p.heat - hs);
+      p.heatAt = t;
+    }
   }
 
   shoot(p: Player, heading: number, weapon: WeaponId = p.weapon, opts: { chargeMs?: number; zoomed?: boolean } = {}): void {
@@ -331,14 +357,14 @@ export class Room {
     if (p.outOfBoundsSince) return;
     if (!p.lastSample) return;
     if (!WEAPON_IDS.includes(weapon)) weapon = "blaster";
-    const W = GAME.WEAPONS[weapon];
+    const W = this.def(p, weapon);
     this.settleReload(p, t);
     this.settleBloom(p, t);
-    if (p.reloadUntil > t) return;
-    if (t - p.lastShotByWeapon[weapon] < W.COOLDOWN_MS) return;
+    if (p.reloadUntil > t || p.stunnedUntil > t || p.lockUntil > t) return;
+    if (t - p.lastShotByWeapon[weapon] < W.cooldownMs) return;
     if (p.mag[weapon] <= 0) {
       p.client.send({ type: "event", kind: "empty", data: { weapon } });
-      if (weapon !== "rocket") this.reload(p, weapon); // auto-reload when spare rounds exist
+      this.reload(p, weapon); // auto-reload when spare rounds exist
       return;
     }
     const prevShot = p.lastShotByWeapon[weapon];
@@ -350,63 +376,127 @@ export class Room {
     const h = Number.isFinite(heading) ? heading : p.heading;
     p.heading = ((h % 360) + 360) % 360;
 
-    if (weapon === "rocket") {
-      this.launchRocket(p, t);
+    if (W.trait === "overheat") {
+      p.heat += W.cooldownMs / 1000;
+      p.heatAt = t;
+      if (p.heat >= 6) {
+        p.heat = 0;
+        p.lockUntil = t + 3000;
+        p.client.send({ type: "event", kind: "overheat", data: { ms: 3000 } });
+      }
+    }
+
+    if (weapon === "rocket" && W.pellets <= 1) {
+      this.launchRocket(p, t, W);
       return;
     }
 
-    // ---- hitscan weapons: GPS-tolerant cone, blocked by barriers
+    // ---- hitscan weapons: GPS-tolerant cone, blocked by barriers, traits
     const zoomed = weapon === "sniper" && (opts.zoomed ?? p.zoomed);
     const bloomNow = p.bloom;
-    const cone = (dist: number) => weaponCone(weapon, dist, bloomNow, zoomed);
+    const cone = (dist: number) => catalogCone(W, dist, bloomNow, zoomed);
     if (weapon === "blaster") {
-      p.bloom = Math.min(W.CONE_MAX - W.CONE, p.bloom + W.BLOOM);
+      p.bloom = Math.max(0, Math.min(W.coneMax - W.cone, p.bloom + W.bloom));
       p.bloomAt = t;
     }
-    // Sniper charge: the client reports hold time; the server clamps it to the time since the previous shot.
-    const charge = weapon === "sniper" ? Math.min(opts.chargeMs ?? 0, t - prevShot) : 0;
-    const charged = weapon === "sniper" && charge >= W.CHARGE_MS;
+    const charge = W.trait === "charge" ? Math.min(opts.chargeMs ?? 0, t - prevShot) : 0;
+    const charged = W.trait === "charge" && charge >= W.chargeMs;
+    const enemies = [...this.players.values()].filter((q) => q.id !== p.id && q.alive && !q.isReferee && this.isEnemy(p, q) && q.lastSample && q.protectedUntil <= t);
+    const allies = W.trait === "heal" ? [...this.players.values()].filter((q) => q.id !== p.id && q.alive && !q.isReferee && !this.isEnemy(p, q) && q.lastSample && q.hp < GAME.MAX_HP) : [];
     const targets = [
-      ...[...this.players.values()]
-        .filter((q) => q.id !== p.id && q.alive && !q.isReferee && this.isEnemy(p, q) && q.lastSample && q.protectedUntil <= t)
-        .map((q) => ({ id: q.id, x: q.x, z: q.z, acc: q.acc })),
+      ...enemies.map((q) => ({ id: q.id, x: q.x, z: q.z, acc: q.acc })),
+      ...allies.map((q) => ({ id: q.id, x: q.x, z: q.z, acc: q.acc })),
       ...[...this.objects.values()]
         .filter((o) => o.hp > 0 && o.team !== null && o.team !== p.team && (o.kind === "turret" || o.kind === "drone"))
         .map((o) => ({ id: o.id, x: o.x, z: o.z, acc: 0 })),
     ];
-    const hit = resolveShot({ x: p.x, z: p.z, acc: p.acc }, p.heading, targets, W.RANGE_M, cone);
-    const evt: ServerMsg = { type: "shot", weapon, shooterId: p.id, x: p.x, z: p.z, heading: p.heading };
-    if (hit) {
+    const evt: ServerMsg = { type: "shot", weapon, weaponId: W.id, shooterId: p.id, x: p.x, z: p.z, heading: p.heading };
+    const rounds = Math.max(1, W.burst) * Math.max(1, W.pellets);
+    // burst consumes extra rounds from the magazine (pellets don't)
+    if (W.burst > 1) p.mag[weapon] = Math.max(0, p.mag[weapon] - (W.burst - 1));
+    const extra: Array<{ targetId: string; damage: number }> = [];
+    let firstDone = false;
+    for (let n = 0; n < rounds; n++) {
+      // pellets scatter: jitter the aim inside the cone
+      const jitter = W.pellets > 1 ? (this.rng() * 2 - 1) * W.cone * 0.8 : 0;
+      const hit = resolveShot({ x: p.x, z: p.z, acc: p.acc }, p.heading + jitter, targets, W.rangeM, cone);
+      if (!hit) continue;
       const tgt = this.players.get(hit.id) ?? this.objects.get(hit.id);
-      const barrier = tgt ? this.barrierBetween(p, tgt) : null;
+      if (!tgt) continue;
+      const barrier = this.barrierBetween(p, tgt);
       if (barrier) {
-        evt.blockedBy = barrier.id;
-        this.damageObject(barrier, Math.round(W.DAMAGE / 2));
-      } else {
-        let dmg = charged ? W.CHARGED_DAMAGE : weapon === "sniper" ? W.DAMAGE : damageAtDistance(W.DAMAGE, hit.dist, W.RANGE_M);
-        if (p.overchargeUntil > t && weapon !== "sniper") dmg *= GAME.OVERCHARGE_MULT;
-        const victim = this.players.get(hit.id);
-        evt.targetId = hit.id;
-        evt.damage = dmg;
-        if (victim) {
-          evt.targetKind = "player";
-          this.damagePlayer(victim, dmg, p, weapon);
-        } else {
-          const obj = this.objects.get(hit.id);
-          if (obj) {
-            evt.targetKind = "object";
-            this.damageObject(obj, dmg);
-          }
-        }
+        if (!firstDone) evt.blockedBy = barrier.id;
+        this.damageObject(barrier, Math.round(W.damage / 2));
+        continue;
       }
-    } else {
-      const wall = this.barrierBetween(p, rayEnd(p, p.heading, W.RANGE_M));
-      if (wall) {
-        evt.blockedBy = wall.id;
-        this.damageObject(wall, Math.round(W.DAMAGE / 2));
+      let dmg = charged ? W.chargedDamage : weapon === "sniper" ? W.damage : damageAtDistance(W.damage, hit.dist, W.rangeM);
+      if (p.overchargeUntil > t && weapon !== "sniper") dmg *= GAME.OVERCHARGE_MULT;
+      const victim = this.players.get(hit.id);
+      if (victim && !this.isEnemy(p, victim)) {
+        // heal trait: ally hit heals
+        victim.hp = Math.min(GAME.MAX_HP, victim.hp + dmg);
+        this.broadcast({ type: "event", kind: "heal", data: { id: victim.id, by: p.id, amount: dmg } });
+        if (!firstDone) {
+          evt.targetId = victim.id;
+          evt.targetKind = "player";
+          evt.damage = 0;
+        }
+        firstDone = true;
+        continue;
+      }
+      if (!firstDone) {
+        evt.targetId = hit.id;
+        evt.targetKind = victim ? "player" : "object";
+        evt.damage = dmg;
+        firstDone = true;
+      } else extra.push({ targetId: hit.id, damage: dmg });
+      if (victim) this.applyHit(p, victim, dmg, weapon, W, t);
+      else {
+        const obj = this.objects.get(hit.id);
+        if (obj) this.damageObject(obj, dmg);
       }
     }
+    if (!firstDone && !evt.blockedBy) {
+      const wall = this.barrierBetween(p, rayEnd(p, p.heading, W.rangeM));
+      if (wall) {
+        evt.blockedBy = wall.id;
+        this.damageObject(wall, Math.round(W.damage / 2));
+      }
+    }
+    if (extra.length) evt.extraHits = extra;
     this.broadcast(evt);
+  }
+
+  /** Apply a hit with the weapon's trait side effects. */
+  private applyHit(p: Player, victim: Player, dmg: number, weapon: KillWeapon, W: WeaponDef, t: number): void {
+    const pierce = W.trait === "pierce";
+    this.damagePlayer(victim, dmg, p, weapon, pierce);
+    if (W.burnS > 0) {
+      victim.burnUntil = Math.max(victim.burnUntil, t + W.burnS * 1000);
+      this.broadcast({ type: "event", kind: "burn", data: { id: victim.id, s: W.burnS } });
+    }
+    if (W.stunMs > 0) {
+      victim.stunnedUntil = Math.max(victim.stunnedUntil, t + W.stunMs);
+      this.broadcast({ type: "event", kind: "stun", data: { id: victim.id, ms: W.stunMs } });
+    }
+    if (W.trait === "lifesteal") p.hp = Math.min(GAME.MAX_HP, p.hp + Math.round(dmg * 0.3));
+    if (W.trait === "chain") {
+      let best: Player | null = null;
+      let bd = 6;
+      for (const q of this.players.values()) {
+        if (q.id === victim.id || q.id === p.id || !q.alive || q.isReferee || !this.isEnemy(p, q) || q.protectedUntil > t) continue;
+        const d = distLocal(victim, q);
+        if (d <= bd) {
+          best = q;
+          bd = d;
+        }
+      }
+      if (best) {
+        const cd = Math.max(1, Math.round(dmg * 0.5));
+        this.damagePlayer(best, cd, p, weapon, pierce);
+        this.broadcast({ type: "shot", weapon, weaponId: W.id, shooterId: p.id, x: victim.x, z: victim.z, heading: bearingLocal(victim, best), targetId: best.id, targetKind: "player", damage: cd });
+      }
+    }
   }
 
   private barriers(): Array<WorldObject & { id: string }> {
@@ -417,13 +507,13 @@ export class Room {
     return firstBarrierOnPath(from, to, this.barriers());
   }
 
-  private launchRocket(p: Player, t: number): void {
-    const R = GAME.WEAPONS.rocket;
-    // Aim assist: if an enemy is inside the cone, fly exactly to them; otherwise fly max range.
+  private launchRocket(p: Player, t: number, W: WeaponDef): void {
+    // Aim assist: if an enemy (or ally for heal) is inside the cone, fly exactly to them; otherwise max range.
+    const heal = W.trait === "heal";
     const targets = [...this.players.values()]
-      .filter((q) => q.id !== p.id && q.alive && !q.isReferee && this.isEnemy(p, q) && q.lastSample)
+      .filter((q) => q.id !== p.id && q.alive && !q.isReferee && (heal ? !this.isEnemy(p, q) : this.isEnemy(p, q)) && q.lastSample)
       .map((q) => ({ id: q.id, x: q.x, z: q.z, acc: q.acc }));
-    const aimed = resolveShot({ x: p.x, z: p.z, acc: p.acc }, p.heading, targets, R.RANGE_M);
+    const aimed = resolveShot({ x: p.x, z: p.z, acc: p.acc }, p.heading, targets, W.rangeM, W.cone);
     const proj: ServerProjectile = {
       id: uid("rk"),
       kind: "rocket",
@@ -435,16 +525,18 @@ export class Room {
       heading: p.heading,
       t0: t,
       lastT: t,
-      maxDist: aimed ? Math.min(R.RANGE_M, aimed.dist) : R.RANGE_M,
+      maxDist: aimed ? Math.min(W.rangeM, aimed.dist) : W.rangeM,
       travelled: 0,
+      def: W,
     };
     this.projectiles.set(proj.id, proj);
-    this.broadcast({ type: "shot", weapon: "rocket", shooterId: p.id, x: p.x, z: p.z, heading: p.heading });
+    this.broadcast({ type: "shot", weapon: "rocket", weaponId: W.id, shooterId: p.id, x: p.x, z: p.z, heading: p.heading });
   }
 
   private tickProjectiles(t: number): void {
-    const R = GAME.WEAPONS.rocket;
     for (const pr of this.projectiles.values()) {
+      const R = { SPEED_MPS: pr.def.speedMps, FUSE_M: pr.def.fuseM };
+      const heal = pr.def.trait === "heal";
       const dt = Math.min(0.5, (t - pr.lastT) / 1000);
       pr.lastT = t;
       const step = R.SPEED_MPS * dt;
@@ -462,7 +554,7 @@ export class Room {
       // proximity fuse on enemies / enemy objects
       let fuse = false;
       for (const q of this.players.values()) {
-        if (!q.alive || q.isReferee || q.team === pr.team || !q.lastSample) continue;
+        if (!q.alive || q.isReferee || (heal ? q.team !== pr.team || q.id === pr.ownerId : q.team === pr.team) || !q.lastSample) continue;
         if (distLocal(pr, q) <= R.FUSE_M) {
           fuse = true;
           break;
@@ -481,31 +573,56 @@ export class Room {
     }
   }
 
-  private explode(pr: ServerProjectile, x: number, z: number, t: number): void {
-    this.projectiles.delete(pr.id);
-    const R = GAME.WEAPONS.rocket;
+  private explode(pr: ServerProjectile, x: number, z: number, t: number, sub = false): void {
+    if (!sub) this.projectiles.delete(pr.id);
+    const W = pr.def;
     const owner = this.players.get(pr.ownerId) ?? null;
     const victims: Array<{ id: string; damage: number }> = [];
+    const heal = W.trait === "heal";
     for (const q of this.players.values()) {
-      if (!q.alive || q.isReferee || !q.lastSample || q.protectedUntil > t) continue;
-      if (q.team === pr.team && q.id !== pr.ownerId) continue; // no team damage; self-damage allowed
+      if (!q.alive || q.isReferee || !q.lastSample) continue;
       const d = distLocal({ x, z }, q);
-      const dmg = splashDamage(d, R.SPLASH_M, q.id === pr.ownerId ? Math.round(R.DAMAGE / 2) : R.DAMAGE, R.DAMAGE_EDGE);
+      if (heal) {
+        if (q.team !== pr.team) continue;
+        const amt = splashDamage(d, W.splashM, W.damage, W.damageEdge);
+        if (amt > 0 && q.hp < GAME.MAX_HP) {
+          q.hp = Math.min(GAME.MAX_HP, q.hp + amt);
+          victims.push({ id: q.id, damage: -amt });
+          this.broadcast({ type: "event", kind: "heal", data: { id: q.id, by: pr.ownerId, amount: amt } });
+        }
+        continue;
+      }
+      if (q.protectedUntil > t) continue;
+      if (q.team === pr.team && q.id !== pr.ownerId) continue; // no team damage; self-damage allowed
+      const dmg = splashDamage(d, W.splashM, q.id === pr.ownerId ? Math.round(W.damage / 2) : W.damage, W.damageEdge);
       if (dmg > 0) {
         victims.push({ id: q.id, damage: dmg });
-        this.damagePlayer(q, dmg, owner, "rocket");
+        if (W.trait === "emp") q.shield = 0;
+        if (owner) this.applyHit(owner, q, dmg, "rocket", W, t);
+        else this.damagePlayer(q, dmg, null, "rocket", W.trait === "pierce");
+        if (W.trait === "lifesteal" && owner) owner.hp = Math.min(GAME.MAX_HP, owner.hp + Math.round(dmg * 0.3));
       }
     }
     for (const o of [...this.objects.values()]) {
       if (o.hp <= 0 || o.team === null || o.team === pr.team) continue;
       if (o.kind !== "turret" && o.kind !== "barrier" && o.kind !== "drone") continue;
-      const dmg = splashDamage(distLocal({ x, z }, o), R.SPLASH_M, R.DAMAGE * 2, R.DAMAGE_EDGE);
-      if (dmg > 0) {
+      const d = distLocal({ x, z }, o);
+      const dmg = splashDamage(d, W.splashM, W.damage * 2, W.damageEdge);
+      if (dmg > 0 && !heal) {
         victims.push({ id: o.id, damage: dmg });
         this.damageObject(o, dmg);
       }
+      if (W.trait === "emp" && d <= W.splashM && this.objects.has(o.id)) o.disabledUntil = t + 6000;
     }
-    this.broadcast({ type: "event", kind: "explosion", data: { x, z, r: R.SPLASH_M, by: pr.ownerId, victims } });
+    if (W.trait === "emp") this.broadcast({ type: "event", kind: "emp", data: { x, z, r: W.splashM } });
+    this.broadcast({ type: "event", kind: "explosion", data: { x, z, r: W.splashM, by: pr.ownerId, victims, weaponId: W.id, heal } });
+    if (W.trait === "cluster" && !sub) {
+      for (let i = 0; i < 3; i++) {
+        const a = (i / 3) * Math.PI * 2 + this.rng();
+        const r = W.splashM * 0.9;
+        this.explode(pr, x + Math.cos(a) * r, z + Math.sin(a) * r, t, true);
+      }
+    }
   }
 
   placeObject(p: Player, kind: ObjectKind, at?: LatLon): WorldObject | null {
@@ -602,12 +719,34 @@ export class Room {
   }
 
   private resetLoadout(p: Player): void {
-    p.mag = fullMags();
-    p.reserve = fullReserve();
+    p.mag = fullMags(p.loadout);
+    p.reserve = fullReserve(p.loadout);
     p.ammo = p.mag.rocket;
     p.reloadUntil = 0;
     p.bloom = 0;
     p.zoomed = false;
+    p.heat = 0;
+    p.lockUntil = 0;
+    p.stunnedUntil = 0;
+    p.burnUntil = 0;
+  }
+
+  /** Equip a catalog weapon into its slot; magazine refills to the new weapon's size. */
+  equip(p: Player, slot: WeaponId, weaponId: string): boolean {
+    const def = weaponById(weaponId);
+    if (!def || def.slot !== slot) return false;
+    p.loadout[slot] = weaponId;
+    p.mag[slot] = slot === "rocket" ? def.mag : def.mag;
+    p.reserve[slot] = def.reserve;
+    if (slot === "rocket") p.ammo = p.mag.rocket;
+    if (p.weapon === slot) p.reloadUntil = 0;
+    p.bloom = 0;
+    p.heat = 0;
+    return true;
+  }
+
+  def(p: Player, slot: WeaponId = p.weapon): WeaponDef {
+    return weaponById(p.loadout[slot]) ?? weaponById(defaultLoadout()[slot])!;
   }
 
   setZone(origin?: LatLon, radiusM?: number, polygon?: LatLon[]): void {
@@ -649,14 +788,30 @@ export class Room {
       this.endRound();
       return;
     }
-    this.lastTickAt = t;
     for (const p of this.players.values()) this.settleReload(p, t);
+    this.tickBurn(t);
     this.tickRespawns(t);
     this.tickProjectiles(t);
     this.tickTurrets(t);
     this.tickDrones(t);
     this.tickPickups(t);
     this.tickMode(t);
+    this.lastTickAt = t;
+  }
+
+  /** Burning players take 3 HP/s (never below 1 HP from burn alone — burn cannot kill). */
+  private tickBurn(t: number): void {
+    const dt = Math.min(0.5, (t - (this.lastTickAt || t)) / 1000) || 1 / GAME.TICK_HZ;
+    for (const p of this.players.values()) {
+      if (!p.alive || p.burnUntil <= t) continue;
+      p.burnAcc += 3 * dt;
+      const whole = Math.floor(p.burnAcc);
+      if (whole >= 1 && p.hp > 1) {
+        p.burnAcc -= whole;
+        p.hp = Math.max(1, p.hp - whole);
+        p.client.send({ type: "hit", by: "burn", damage: whole, hp: p.hp });
+      }
+    }
   }
 
   /**
@@ -711,7 +866,7 @@ export class Room {
       d.x = c.x + Math.cos(d.phase) * r;
       d.z = c.z + Math.sin(d.phase) * r;
       d.heading = target ? bearingLocal(d, target) : (d.phase * 180) / Math.PI + 90;
-      if (target && t - d.lastShotAt >= D.COOLDOWN_MS && !this.barrierBetween(d, target)) {
+      if (target && t - d.lastShotAt >= D.COOLDOWN_MS && !this.barrierBetween(d, target) && !(d.disabledUntil && d.disabledUntil > t)) {
         d.lastShotAt = t;
         this.broadcast({ type: "shot", weapon: "drone", shooterId: d.id, x: d.x, z: d.z, heading: d.heading, targetId: target.id, targetKind: "player", damage: D.DAMAGE });
         const owner = d.ownerId ? this.players.get(d.ownerId) ?? null : null;
@@ -751,11 +906,14 @@ export class Room {
         return true;
       case "ammo": {
         const primary = p.weapon === "rocket" || p.weapon === "pistol" ? "blaster" : p.weapon;
-        const full = p.mag.rocket >= GAME.WEAPONS.rocket.AMMO + 2 && (p.reserve[primary] < 0 || p.reserve[primary] >= GAME.WEAPONS[primary].RESERVE);
+        const heavy = this.def(p, "rocket");
+        const prim = this.def(p, primary);
+        const cap = Math.max(heavy.mag, GAME.WEAPONS.rocket.AMMO) + 2;
+        const full = p.mag.rocket >= cap && (p.reserve[primary] < 0 || p.reserve[primary] >= prim.reserve);
         if (full) return false;
-        p.mag.rocket = Math.min(GAME.WEAPONS.rocket.AMMO + 2, p.mag.rocket + 2);
+        p.mag.rocket = Math.min(cap, p.mag.rocket + 2);
         p.ammo = p.mag.rocket;
-        if (p.reserve[primary] >= 0) p.reserve[primary] = Math.min(GAME.WEAPONS[primary].RESERVE, p.reserve[primary] + GAME.WEAPONS[primary].MAG);
+        if (p.reserve[primary] >= 0) p.reserve[primary] = Math.min(prim.reserve, p.reserve[primary] + prim.mag);
         return true;
       }
       case "shield":
@@ -794,6 +952,7 @@ export class Room {
   private tickTurrets(t: number): void {
     for (const o of this.objects.values()) {
       if (o.kind !== "turret" || o.hp <= 0) continue;
+      if (o.disabledUntil && o.disabledUntil > t) continue;
       const turret = o as Turret;
       if (t - (turret.lastShotAt ?? 0) < GAME.TURRET.COOLDOWN_MS) continue;
       let best: Player | null = null;
@@ -914,9 +1073,9 @@ export class Room {
     return p.team !== team;
   }
 
-  private damagePlayer(victim: Player, dmg: number, attacker: Player | null, weapon: KillWeapon): void {
+  private damagePlayer(victim: Player, dmg: number, attacker: Player | null, weapon: KillWeapon, pierce = false): void {
     if (!victim.alive) return;
-    if (victim.shield > 0) {
+    if (victim.shield > 0 && !pierce) {
       const absorbed = Math.min(victim.shield, dmg);
       victim.shield -= absorbed;
       dmg -= absorbed;
@@ -1006,6 +1165,9 @@ export function publicView(p: Player): PlayerPublic {
     reloadUntil: p.reloadUntil,
     bloom: Math.round(p.bloom * 10) / 10,
     zoomed: p.zoomed,
+    loadout: { ...p.loadout },
+    stunnedUntil: p.stunnedUntil,
+    burnUntil: p.burnUntil,
     overchargeUntil: p.overchargeUntil,
     protectedUntil: p.protectedUntil,
     respawnAt: p.alive ? 0 : p.respawnAt,
@@ -1013,8 +1175,9 @@ export function publicView(p: Player): PlayerPublic {
 }
 
 export function publicObject(o: WorldObject): WorldObject {
-  const { id, kind, team, ownerId, x, z, hp, heading, carriedBy, y, expiresAt } = o;
+  const { id, kind, team, ownerId, x, z, hp, heading, carriedBy, y, expiresAt, disabledUntil } = o;
   const out: WorldObject = { id, kind, team, ownerId, x, z, hp };
+  if (disabledUntil !== undefined) out.disabledUntil = disabledUntil;
   if (heading !== undefined) out.heading = heading;
   if (carriedBy !== undefined) out.carriedBy = carriedBy;
   if (y !== undefined) out.y = y;
@@ -1022,11 +1185,13 @@ export function publicObject(o: WorldObject): WorldObject {
   return out;
 }
 
-export function fullMags(): Record<WeaponId, number> {
-  return { pistol: GAME.WEAPONS.pistol.MAG, blaster: GAME.WEAPONS.blaster.MAG, sniper: GAME.WEAPONS.sniper.MAG, rocket: GAME.WEAPONS.rocket.AMMO };
+export function fullMags(lo: Loadout = defaultLoadout()): Record<WeaponId, number> {
+  const d = (s: WeaponId) => weaponById(lo[s]) ?? weaponById(defaultLoadout()[s])!;
+  return { pistol: d("pistol").mag, blaster: d("blaster").mag, sniper: d("sniper").mag, rocket: d("rocket").mag };
 }
-export function fullReserve(): Record<WeaponId, number> {
-  return { pistol: GAME.WEAPONS.pistol.RESERVE, blaster: GAME.WEAPONS.blaster.RESERVE, sniper: GAME.WEAPONS.sniper.RESERVE, rocket: 0 };
+export function fullReserve(lo: Loadout = defaultLoadout()): Record<WeaponId, number> {
+  const d = (s: WeaponId) => weaponById(lo[s]) ?? weaponById(defaultLoadout()[s])!;
+  return { pistol: d("pistol").reserve, blaster: d("blaster").reserve, sniper: d("sniper").reserve, rocket: d("rocket").reserve };
 }
 
 /** Small deterministic PRNG (for pickup placement; seedable in tests). */

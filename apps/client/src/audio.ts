@@ -146,27 +146,28 @@ export class GameAudio {
 
   /* ---------- game cues ---------- */
 
-  shot(weapon: "pistol" | "blaster" | "sniper" | "rocket"): void {
+  shot(weapon: "pistol" | "blaster" | "sniper" | "rocket", pitch?: number): void {
+    const r = (base: number) => (pitch ? base * (pitch / (weapon === "rocket" ? 0.55 : weapon === "pistol" ? 1.5 : weapon === "sniper" ? 0.6 : 1.15)) : base);
     switch (weapon) {
       case "rocket":
-        this.play("blaster", { gain: 0.9, rate: 0.55, reverb: 0.7 });
+        this.play("blaster", { gain: 0.9, rate: r(0.55), reverb: 0.7 });
         this.noise(0.5, 0.6, 3000, 300);
         this.osc(90, 0.35, "sawtooth", 0.35, 40);
         this.vibrate(40);
         break;
       case "pistol":
-        this.play("laser1", { gain: 0.6, rate: 1.5, reverb: 0.3 });
+        this.play("laser1", { gain: 0.6, rate: r(1.5), reverb: 0.3 });
         this.osc(900, 0.05, "square", 0.08, 300);
         this.vibrate(10);
         break;
       case "sniper":
-        this.play("zap", { gain: 1, rate: 0.6, reverb: 0.9 });
+        this.play("zap", { gain: 1, rate: r(0.6), reverb: 0.9 });
         this.noise(0.25, 0.7, 5000, 400);
         this.osc(50, 0.5, "sine", 0.7, 30);
         this.vibrate(35);
         break;
       default:
-        this.play("laser4", { gain: 0.7, rate: 1.15, reverb: 0.4 });
+        this.play("laser4", { gain: 0.7, rate: r(1.15), reverb: 0.4 });
         this.osc(140, 0.06, "square", 0.15, 60);
         this.vibrate(12);
     }

@@ -5,3 +5,4 @@ export * from "./combat";
 export * from "./filters";
 export * from "./anticheat";
 export * from "./ids";
+export * from "./weapons";

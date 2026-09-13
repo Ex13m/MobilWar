@@ -1,6 +1,20 @@
 import * as THREE from "three";
 import type { WeaponId } from "@mobilwar/shared";
-import { WEAPON_PRESETS, loadModel, sprite } from "../assets.js";
+import { WEAPON_PRESETS, MODEL_SCALE, loadModel, sprite, type ModelId } from "../assets.js";
+import { weaponById, type WeaponDef } from "@mobilwar/shared";
+
+/** Emissive tint so every catalog variant of the same model reads differently. */
+function tint(root: THREE.Object3D, color: number): void {
+  const c = new THREE.Color(color);
+  root.traverse((o) => {
+    const m = o as THREE.Mesh;
+    if (!m.isMesh) return;
+    const mat = (m.material as THREE.MeshStandardMaterial).clone();
+    mat.emissive = c.clone();
+    mat.emissiveIntensity = 0.28;
+    m.material = mat;
+  });
+}
 
 /** Critically damped spring on a scalar. */
 class Spring {
@@ -31,6 +45,7 @@ export class Viewmodel {
   private holder = new THREE.Group();
   private model: THREE.Object3D | null = null;
   private weapon: WeaponId = "blaster";
+  private def: WeaponDef | null = null;
   private back = new Spring(160, 22);
   private pitch = new Spring(200, 26);
   private camPitch = new Spring(220, 28);
@@ -61,16 +76,21 @@ export class Viewmodel {
     return this.weapon;
   }
 
-  async setWeapon(w: WeaponId): Promise<void> {
+  async setWeapon(w: WeaponId, weaponId?: string): Promise<void> {
     this.weapon = w;
     const seq = ++this.loading;
     const p = WEAPON_PRESETS[w];
+    const def = weaponId ? weaponById(weaponId) ?? null : this.def;
+    this.def = def;
     this.switchT = 0;
-    const m = await loadModel(p.model);
+    const modelId = (def && def.model in MODEL_SCALE ? (def.model as ModelId) : p.model);
+    const m = await loadModel(modelId);
     if (seq !== this.loading) return;
     if (this.model) this.holder.remove(this.model);
-    m.scale.setScalar(p.scale);
+    const scale = MODEL_SCALE[modelId] ?? p.scale;
+    m.scale.setScalar(scale);
     m.rotation.set(p.rot[0], p.rot[1], p.rot[2]);
+    if (def) tint(m, def.color);
     // Centre the model on its bounding box so presets are stable across packs.
     const box = new THREE.Box3().setFromObject(m);
     const c = box.getCenter(new THREE.Vector3());
@@ -78,12 +98,15 @@ export class Viewmodel {
     this.model = m;
     this.holder.add(m);
     this.holder.position.set(p.pos[0], p.pos[1], p.pos[2]);
-    const mz = new THREE.Vector3(p.muzzle[0], p.muzzle[1], p.muzzle[2]).multiplyScalar(p.scale).sub(c);
+    // muzzle = front of the bounding box along the barrel (-Z after rotation)
+    const box2 = new THREE.Box3().setFromObject(m);
+    const mz = new THREE.Vector3(0, (box2.min.y + box2.max.y) / 2 + 0.03, box2.min.z);
     this.flash.position.copy(mz);
     this.flashLight.position.copy(mz);
     (this.flash.material as THREE.SpriteMaterial).map = sprite(p.flash);
-    (this.flash.material as THREE.SpriteMaterial).color.set(p.boltColor);
-    this.flashLight.color.set(p.boltColor);
+    const color = def ? def.color : p.boltColor;
+    (this.flash.material as THREE.SpriteMaterial).color.set(color);
+    this.flashLight.color.set(color);
   }
 
   /** Fire animation. Returns nothing; camera kick is read via cameraKick(). */

@@ -1,4 +1,4 @@
-import { uid, type AvatarId, type PlayMode } from "@mobilwar/shared";
+import { defaultLoadout, sanitizeLoadout, uid, type AvatarId, type Loadout, type PlayMode } from "@mobilwar/shared";
 
 const KEY = "mobilwar.profile.v1";
 
@@ -8,12 +8,17 @@ export interface Profile {
   avatar: AvatarId;
   playMode: PlayMode;
   lastRoom?: string;
+  loadout: Loadout;
 }
 
 export function loadProfile(): Profile {
   try {
     const raw = localStorage.getItem(KEY);
-    if (raw) return { ...defaults(), ...(JSON.parse(raw) as Partial<Profile>) };
+    if (raw) {
+      const p = { ...defaults(), ...(JSON.parse(raw) as Partial<Profile>) };
+      p.loadout = sanitizeLoadout(p.loadout);
+      return p;
+    }
   } catch {
     /* ignore */
   }
@@ -31,5 +36,5 @@ export function saveProfile(p: Profile): void {
 }
 
 function defaults(): Profile {
-  return { deviceId: uid("dev"), nick: "", avatar: "scout", playMode: "ar" };
+  return { deviceId: uid("dev"), nick: "", avatar: "scout", playMode: "ar", loadout: defaultLoadout() };
 }

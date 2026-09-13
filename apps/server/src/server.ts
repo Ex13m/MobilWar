@@ -190,6 +190,7 @@ export function createApp(opts: { dbPath?: string } = {}) {
             deviceId: conn.deviceId,
             team: msg.team,
             isReferee,
+            loadout: msg.loadout,
           });
         } catch (e) {
           conn.send({ type: "error", code: (e as Error).message, text: "Комната заполнена" });
@@ -227,6 +228,14 @@ export function createApp(opts: { dbPath?: string } = {}) {
       case "zoom": {
         const p = conn.room?.players.get(conn.id);
         if (p && conn.room) conn.room.setZoom(p, !!msg.on);
+        return;
+      }
+      case "loadout": {
+        const p = conn.room?.players.get(conn.id);
+        if (p && conn.room) {
+          if (!conn.room.equip(p, msg.slot, String(msg.weaponId))) conn.send({ type: "error", code: "bad_weapon", text: "Нет такого оружия" });
+          else conn.send({ type: "snapshot", snap: conn.room.snapshot() });
+        }
         return;
       }
       case "weapon": {

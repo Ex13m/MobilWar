@@ -1,5 +1,6 @@
 import { AVATARS, GAME, type AvatarId, type GameMode, type PlayMode, type RoomInfo } from "@mobilwar/shared";
 import { createRoom, listRooms } from "../api.js";
+import { renderLoadout } from "./loadout.js";
 import { saveProfile, type Profile } from "../storage.js";
 
 export interface LobbyResult {
@@ -45,6 +46,10 @@ export function showLobby(root: HTMLElement, profile: Profile, getFix: () => { l
           </div>
         </div>
         <div class="card">
+          <h2>Оружие <span class="hint" style="font-weight:400">4 слота × 30 вариантов, листай</span></h2>
+          <div id="loadout"></div>
+        </div>
+        <div class="card">
           <h2>Войти по коду</h2>
           <div class="row">
             <input id="code" maxlength="4" placeholder="КОД" style="text-transform:uppercase;letter-spacing:.2em;font-weight:700" value="${esc(preRoom)}" />
@@ -88,6 +93,8 @@ export function showLobby(root: HTMLElement, profile: Profile, getFix: () => { l
       chip.classList.add("active");
       profile.playMode = chip.dataset.m as PlayMode;
     });
+
+    renderLoadout($("#loadout"), profile.loadout, () => saveProfile(profile));
 
     function commitProfile(): boolean {
       profile.nick = $<HTMLInputElement>("#nick").value.trim();

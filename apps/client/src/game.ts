@@ -12,6 +12,8 @@ import { Hud, fmtTime } from "./ui/hud.js";
 import type { Profile } from "./storage.js";
 import { FX } from "./fx/effects.js";
 import { WEAPON_PRESETS, preload } from "./assets.js";
+import { renderLoadout } from "./ui/loadout.js";
+import { weaponById, SLOTS, type Slot } from "@mobilwar/shared";
 
 export interface GameOptions {
   root: HTMLElement;
@@ -82,8 +84,9 @@ export class Game {
         onReload: () => this.reload(),
         onZoom: () => this.toggleZoom(),
         onPlace: (k) => this.place(k),
-        onMenu: () => this.exit(),
+        onMenu: () => this.openMenu(),
       });
+      this.hud.setLoadout(this.o.profile.loadout);
       this.scene.onXrSelect = () => this.fire(this.weapon);
       const xr = await ArScene.xrSupported();
       if (xr) {
@@ -186,7 +189,7 @@ export class Game {
 
   private join(): void {
     const { profile, roomId, playMode } = this.o;
-    this.net.send({ type: "join", roomId, nick: profile.nick, avatar: profile.avatar, playMode, deviceId: profile.deviceId });
+    this.net.send({ type: "join", roomId, nick: profile.nick, avatar: profile.avatar, playMode, deviceId: profile.deviceId, loadout: profile.loadout });
   }
 
   private sendPos(): void {
@@ -202,13 +205,32 @@ export class Game {
     this.reloadEnd = 0;
     this.o.audio.weaponSwitch();
     this.net.send({ type: "weapon", weapon: w });
-    void this.scene?.viewmodel.setWeapon(w);
+    void this.scene?.viewmodel.setWeapon(w, this.o.profile.loadout[w]);
     this.hud?.setWeapon(w);
     this.hud?.setZoom(false, w === "sniper");
   }
 
   private reload(): void {
     this.net.send({ type: "reload" });
+  }
+
+  /** In-game drawer: weapon catalog per slot (for field balance testing) + exit. */
+  private openMenu(): void {
+    const root = this.o.root;
+    if (root.querySelector(".drawer")) return;
+    root.insertAdjacentHTML("beforeend", `<div class="drawer"><div class="row"><button class="btn secondary" id="dr-close">← В бой</button><button class="btn danger" id="dr-exit">Выйти из зоны</button></div><div id="dr-loadout"></div></div>`);
+    const drawer = root.querySelector<HTMLElement>(".drawer")!;
+    const off = renderLoadout(drawer.querySelector("#dr-loadout")!, this.o.profile.loadout, (slot, id) => {
+      this.net.send({ type: "loadout", slot, weaponId: id });
+      this.hud?.setLoadout(this.o.profile.loadout);
+      if (slot === this.weapon) void this.scene?.viewmodel.setWeapon(slot, id);
+      this.o.audio.weaponSwitch();
+    });
+    drawer.querySelector("#dr-close")!.addEventListener("click", () => {
+      off();
+      drawer.remove();
+    });
+    drawer.querySelector("#dr-exit")!.addEventListener("click", () => this.exit());
   }
 
   private toggleZoom(): void {
@@ -257,17 +279,22 @@ export class Game {
     }
     this.lastShotAt[w] = now;
     const heading = this.o.sensors.orient.heading;
-    this.o.audio.shot(w);
+    this.o.audio.shot(w, weaponById(this.o.profile.loadout[w])?.pitch);
     this.net.send({ type: "shoot", weapon: w, heading, pitch: this.o.sensors.orient.pitch, ct: now, chargeMs: Math.round(chargeMs), zoomed: this.zoomed });
     if (this.scene) {
-      if (w !== this.scene.viewmodel.current) void this.scene.viewmodel.setWeapon(w);
+      if (w !== this.scene.viewmodel.current) void this.scene.viewmodel.setWeapon(w, this.o.profile.loadout[w]);
       this.scene.viewmodel.fire();
-      if (w !== "rocket") {
-        // Immediate local bolt from the muzzle; the server decides the hit.
+      const def = weaponById(this.o.profile.loadout[w]);
+      if (w !== "rocket" || (def && def.pellets > 1)) {
+        // Immediate local bolt(s) from the muzzle; the server decides the hit.
         const from = this.zoomed ? undefined : this.scene.muzzleInWorld();
         const hot = this.aimTarget();
-        const preset = WEAPON_PRESETS[w];
-        this.scene.bolt(this.world.me.x, this.world.me.z, heading, W.RANGE_M, preset.boltColor, hot ? { x: hot.x, z: hot.z } : undefined, from);
+        const color = def?.color ?? WEAPON_PRESETS[w].boltColor;
+        const n = def ? Math.max(1, def.pellets) : 1;
+        for (let i = 0; i < n; i++) {
+          const jitter = n > 1 ? (Math.random() - 0.5) * (def?.cone ?? 8) : 0;
+          this.scene.bolt(this.world.me.x, this.world.me.z, heading + jitter, def?.rangeM ?? W.RANGE_M, color, hot && n === 1 ? { x: hot.x, z: hot.z } : undefined, from);
+        }
       }
     }
   }
@@ -396,7 +423,8 @@ export class Game {
     const rel = this.relTo(m.x, m.z) * (Math.PI / 180);
     this.o.audio.remoteShot(m.weapon, { x: Math.sin(rel) * Math.min(d, 30), z: -Math.cos(rel) * Math.min(d, 30) }, d);
     if (!this.scene || m.weapon === "rocket") return;
-    const color = m.weapon === "turret" ? FX.turret : m.weapon === "drone" ? FX.drone : this.world.players.get(m.shooterId)?.team === "red" ? FX.blasterRed : FX.blasterBlue;
+    const def = m.weaponId ? weaponById(m.weaponId) : undefined;
+    const color = m.weapon === "turret" ? FX.turret : m.weapon === "drone" ? FX.drone : def?.color ?? (this.world.players.get(m.shooterId)?.team === "red" ? FX.blasterRed : FX.blasterBlue);
     let target: { x: number; z: number } | undefined;
     if (m.targetId === this.world.myId) target = { x: this.world.me.x, z: this.world.me.z };
     else if (m.targetId) {
@@ -467,6 +495,37 @@ export class Game {
       case "empty":
         this.o.audio.empty();
         return;
+      case "burn":
+        if (data?.id === this.world.myId) {
+          this.hud?.fx("burn", Number(data?.s ?? 3) * 1000);
+          this.hud?.banner("Ты горишь!", "warn", 1500);
+        }
+        return;
+      case "stun":
+        if (data?.id === this.world.myId) {
+          this.hud?.fx("stun", Number(data?.ms ?? 500));
+          this.o.audio.shieldHit();
+        }
+        return;
+      case "heal":
+        if (data?.id === this.world.myId) {
+          this.hud?.banner(`+${data?.amount} HP`, "good", 1200);
+          this.o.audio.pickup("medkit");
+        } else if (data?.by === this.world.myId) {
+          const pos = this.scene?.playerPos(String(data?.id));
+          if (pos) this.scene?.fx.damageNumber(pos, `+${data?.amount}`, "#4ade80");
+        }
+        return;
+      case "overheat":
+        this.hud?.banner("Перегрев! 3 с", "warn", 3000);
+        this.o.audio.warn();
+        return;
+      case "emp": {
+        const x = Number(data?.x);
+        const z = Number(data?.z);
+        if (this.scene) this.scene.fx.shieldRipple(new THREE.Vector3(x, 1, z));
+        return;
+      }
       case "respawn":
         if (data?.id === this.world.myId) {
           this.dead = false;

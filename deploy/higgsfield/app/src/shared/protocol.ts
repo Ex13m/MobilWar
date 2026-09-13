@@ -1,5 +1,6 @@
 import type { LatLon } from "./geo";
 import type { AvatarId, Team, WeaponId } from "./constants";
+import type { Loadout } from "./weapons";
 
 export type GameMode = "tdm" | "ctf" | "koth" | "infection" | "turret_defense";
 export type PlayMode = "ar" | "screenless" | "referee";
@@ -44,6 +45,12 @@ export interface PlayerPublic {
   bloom: number;
   /** Sniper zoom on (affects cone). */
   zoomed: boolean;
+  /** Equipped catalog weapon per slot. */
+  loadout: Loadout;
+  /** Epoch ms until which the player cannot fire (stun). */
+  stunnedUntil: number;
+  /** Epoch ms until which the player burns (3 dmg/s). */
+  burnUntil: number;
   /** Epoch ms until which the overcharge buff is active (0 = none). */
   overchargeUntil: number;
   /** Epoch ms until which spawn protection is active. */
@@ -81,6 +88,8 @@ export interface WorldObject {
   y?: number;
   /** Epoch ms when the object expires (pickups, drones). */
   expiresAt?: number;
+  /** Epoch ms until which a turret/drone is disabled by EMP. */
+  disabledUntil?: number;
 }
 
 export interface BaseInfo {
@@ -124,6 +133,8 @@ export interface JoinMsg {
   deviceId: string;
   /** Preferred team; server may override for balance. */
   team?: Team;
+  /** Chosen catalog weapons per slot (validated server-side). */
+  loadout?: Partial<Loadout>;
 }
 
 export interface PosMsg {
@@ -156,6 +167,13 @@ export interface SelectWeaponMsg {
 
 export interface ReloadMsg {
   type: "reload";
+}
+
+/** Equip a catalog weapon into its slot (allowed any time; for testing balance in the field). */
+export interface LoadoutMsg {
+  type: "loadout";
+  slot: WeaponId;
+  weaponId: string;
 }
 
 export interface ZoomMsg {
@@ -206,6 +224,7 @@ export type ClientMsg =
   | SelectWeaponMsg
   | ReloadMsg
   | ZoomMsg
+  | LoadoutMsg
   | PlaceObjectMsg
   | RefereeCmdMsg
   | PingMsg
@@ -230,6 +249,10 @@ export interface SnapshotMsg {
 export interface ShotEventMsg {
   type: "shot";
   weapon: WeaponId | "turret" | "drone";
+  /** Catalog id of the weapon (for colour / sound on other clients). */
+  weaponId?: string;
+  /** Additional pellets/burst hits resolved in the same trigger. */
+  extraHits?: Array<{ targetId: string; damage: number }>;
   shooterId: string;
   x: number;
   z: number;
@@ -274,7 +297,12 @@ export interface EventMsg {
     | "pickup_spawned"
     | "respawn"
     | "reload"
-    | "empty";
+    | "empty"
+    | "burn"
+    | "stun"
+    | "emp"
+    | "heal"
+    | "overheat";
   data?: Record<string, unknown>;
 }
 

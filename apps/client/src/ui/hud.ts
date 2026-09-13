@@ -1,4 +1,4 @@
-import { GAME, type ObjectKind, type WeaponId } from "@mobilwar/shared";
+import { GAME, weaponById, type Loadout, type ObjectKind, type WeaponId } from "@mobilwar/shared";
 import type { WorldState } from "../state.js";
 
 export interface HudCallbacks {
@@ -25,6 +25,8 @@ export class Hud {
       `<div class="hud">
         <div class="flash"></div>
         <div class="vignette"></div>
+        <div class="burnfx"></div>
+        <div class="stunfx"></div>
         <div class="dmgdir"></div>
         <div class="top">
           <div class="score"><span class="red">0</span>:<span class="blue">0</span> <span class="timer">--:--</span></div>
@@ -118,6 +120,23 @@ export class Hud {
     this.q(".reload").addEventListener("click", () => cb.onReload());
     this.q(".zoom").addEventListener("click", () => cb.onZoom());
     this.q(".menu").addEventListener("click", () => cb.onMenu());
+  }
+
+  setLoadout(lo: Loadout): void {
+    this.el.querySelectorAll<HTMLButtonElement>(".wbtn").forEach((b) => {
+      const w = weaponById(lo[b.dataset.w as WeaponId]);
+      if (w) {
+        b.querySelector("b")!.textContent = w.name;
+        b.style.setProperty("--c", `#${w.color.toString(16).padStart(6, "0")}`);
+      }
+    });
+  }
+  private fxTimers: Record<string, number> = {};
+  fx(kind: "burn" | "stun", ms: number): void {
+    const el = this.q<HTMLElement>(`.${kind}fx`);
+    el.classList.add("on");
+    if (this.fxTimers[kind]) clearTimeout(this.fxTimers[kind]);
+    this.fxTimers[kind] = window.setTimeout(() => el.classList.remove("on"), ms);
   }
 
   /** Magazine / reserve per weapon; -1 reserve = infinite. */

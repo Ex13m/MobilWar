@@ -5,10 +5,16 @@ import type { WeaponId } from "@mobilwar/shared";
 /** Static asset registry. Files live in apps/client/public/assets (CC0, see LICENSES.md). */
 export const MODELS = {
   pistol: "/assets/models/blaster-b.glb",
+  pistol2: "/assets/models/blaster-h.glb",
+  pistol3: "/assets/models/pistol.glb",
   rifle: "/assets/models/blaster-a.glb",
+  rifle2: "/assets/models/blaster-p.glb",
+  rifle3: "/assets/models/fps/blaster.glb",
   sniper: "/assets/models/blaster-e.glb",
+  sniper2: "/assets/models/sniper.glb",
   minigun: "/assets/models/machinegun.glb",
   rocket: "/assets/models/rocketlauncherModern.glb",
+  rocket2: "/assets/models/fps/blaster.glb",
   rocketAmmo: "/assets/models/ammo_rocket.glb",
   clip: "/assets/models/clip-small.glb",
   crate: "/assets/models/crate-small.glb",
@@ -171,9 +177,15 @@ export function sprite(id: SpriteId): THREE.Texture {
   return t;
 }
 
+/** Per-model viewmodel scale so different packs look the same size in hand. */
+export const MODEL_SCALE: Record<ModelId, number> = {
+  pistol: 0.55, pistol2: 0.5, pistol3: 0.9, rifle: 0.6, rifle2: 0.55, rifle3: 0.35, sniper: 0.6, sniper2: 0.7, minigun: 0.9,
+  rocket: 0.75, rocket2: 0.4, rocketAmmo: 1, clip: 1, crate: 1, turret: 1, drone: 1,
+};
+
 /** Warm the caches for everything the first fight needs. Safe to call multiple times. */
 export function preload(): Promise<void> {
-  const models: ModelId[] = ["rifle", "pistol", "sniper", "rocket", "turret", "drone", "crate", "rocketAmmo"];
+  const models: ModelId[] = ["rifle", "pistol", "sniper", "rocket", "turret", "drone", "crate", "rocketAmmo", "pistol2", "pistol3", "rifle2", "rifle3", "sniper2", "minigun", "rocket2"];
   (Object.keys(SPRITES) as SpriteId[]).forEach(sprite);
   return Promise.all(models.map((m) => loadModel(m).catch(() => null))).then(() => undefined);
 }
