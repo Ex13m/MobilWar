@@ -8,5 +8,6 @@
 - Сервер — единственный источник истины по попаданиям/урону/очкам. Клиент только предсказывает визуал.
 - Координаты: ENU относительно `room.origin`, x = восток, z = юг (three.js: север = -Z). Все константы в `packages/shared/src/constants.ts`.
 - Любое изменение протокола — в `packages/shared/src/protocol.ts` + тест в `apps/server/test`.
-- Не добавлять внешние ассеты (модели/звуки): всё процедурно, чтобы грузилось мгновенно на слабых телефонах.
-- Документация: `docs/GDD.md`, `docs/ARCHITECTURE.md`, `docs/research/competitive-analysis.md`.
+- Ассеты: только CC0/MIT (реестр в `apps/client/public/assets/LICENSES.md`, регистр в `apps/client/src/assets.ts`). Бюджет загрузки клиента 3 МБ; модели GLB ≤ 150 КБ, спрайты ≤ 256 px, звуки OGG. Эффекты (заряды, взрывы, цифры урона) — `apps/client/src/fx`, оружие от первого лица — `apps/client/src/ar/weapons.ts`.
+- Документация: `docs/TZ.md` (ТЗ на полноценный бой), `docs/GDD.md`, `docs/ARCHITECTURE.md`, `docs/LOOT_AND_RESPAWN.md`, `docs/research/` (рынок, библиотеки и ассеты).
+- Смоук в headless Chromium: сервер `:8080`, `vite preview :4173`, скрипт в scratchpad `smoke2.mjs` (синтетическая ориентация через DeviceOrientationEvent на оба имени события).

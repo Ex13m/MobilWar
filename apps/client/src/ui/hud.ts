@@ -1,149 +1,220 @@
-import { GAME, type ObjectKind } from "@mobilwar/shared";
+import { GAME, type ObjectKind, type WeaponId } from "@mobilwar/shared";
 import type { WorldState } from "../state.js";
 
 export interface HudCallbacks {
   onFire(): void;
-  onPlace(kind: ObjectKind): void;
+  onFireRocket(): void;
+  onWeapon(w: WeaponId): void;
+  onPlace(kind: Extract<ObjectKind, "turret" | "barrier" | "drone" | "medkit">): void;
   onMenu(): void;
 }
 
 /** DOM heads-up display. Also used as the WebXR dom-overlay root. */
 export class Hud {
   readonly el: HTMLElement;
-  private score: HTMLElement;
-  private timer: HTMLElement;
-  private gps: HTMLElement;
-  private net: HTMLElement;
-  private hp: HTMLElement;
-  private crosshair: HTMLElement;
-  private feedEl: HTMLElement;
-  private bannerEl: HTMLElement;
-  private compass: HTMLElement;
-  private supply: HTMLElement;
-  private flashEl: HTMLElement;
-  private radar: HTMLCanvasElement;
-  private placeMenu: HTMLElement;
+  private q = <T extends Element>(s: string) => this.el.querySelector(s) as T;
   private bannerTimer: number | null = null;
+  private lastHp = GAME.MAX_HP as number;
 
   constructor(root: HTMLElement, cb: HudCallbacks) {
     root.insertAdjacentHTML(
       "beforeend",
       `<div class="hud">
         <div class="flash"></div>
+        <div class="vignette"></div>
+        <div class="dmgdir"></div>
         <div class="top">
           <div class="score"><span class="red">0</span>:<span class="blue">0</span> <span class="timer">--:--</span></div>
           <div class="status"><span class="gps">GPS…</span><span class="net">⇄</span></div>
         </div>
         <button class="btn secondary menu" style="min-height:36px;padding:6px 10px">☰</button>
         <div class="compass">— °</div>
+        <div class="streak" hidden>серия <b>0</b></div>
         <div class="feed"></div>
         <div class="radar"><canvas width="192" height="192"></canvas></div>
-        <div class="crosshair"></div>
+        <div class="crosshair"><i class="hm"></i></div>
         <div class="banner" hidden></div>
-        <div class="place-menu" hidden style="position:absolute;bottom:110px;right:12px;display:flex;flex-direction:column;gap:8px">
-          <button class="btn secondary" data-kind="turret">🔫 Турель (${GAME.TURRET.COST})</button>
-          <button class="btn secondary" data-kind="barrier">🧱 Укрытие (1)</button>
-          <button class="btn secondary" data-kind="medkit">➕ Аптечка (1)</button>
+        <div class="dead" hidden>
+          <div class="dead-title">ТЫ ВЫБЫЛ</div>
+          <div class="dead-by"></div>
+          <div class="dead-timer">8</div>
+          <div class="dead-hint">Иди на свою базу</div>
+          <div class="dead-arrow">➤</div>
+          <div class="dead-dist">— м</div>
+        </div>
+        <div class="place-menu" hidden>
+          <button class="btn secondary" data-kind="turret">🔫 Турель · ${GAME.TURRET.COST}</button>
+          <button class="btn secondary" data-kind="drone">🛸 Дрон · ${GAME.DRONE.COST}</button>
+          <button class="btn secondary" data-kind="barrier">🧱 Укрытие · 1</button>
+          <button class="btn secondary" data-kind="medkit">➕ Аптечка · 1</button>
         </div>
         <div class="bottom">
-          <div class="hpbar"><i style="width:100%"></i></div>
-          <button class="place">🛠<small class="supply" style="font-size:11px;display:block">${GAME.SUPPLY_PER_PLAYER}</small></button>
-          <button class="fire">Огонь</button>
+          <div class="vitals">
+            <div class="hpnum">100</div>
+            <div class="hpbar">${Array.from({ length: 10 }, () => "<i></i>").join("")}</div>
+            <div class="shieldbar"><i></i></div>
+            <div class="weapons">
+              <button class="wbtn active" data-w="blaster"><b>Гроза</b><small>∞</small></button>
+              <button class="wbtn" data-w="rocket"><b>Молот</b><small class="ammo">2</small></button>
+              <button class="place">🛠<small class="supply">${GAME.SUPPLY_PER_PLAYER}</small></button>
+            </div>
+          </div>
+          <div class="firecol">
+            <button class="fire2" title="Ракета">🚀</button>
+            <button class="fire">Огонь</button>
+          </div>
         </div>
       </div>`,
     );
     this.el = root.querySelector(".hud")!;
-    const q = <T extends Element>(s: string) => this.el.querySelector(s) as T;
-    this.score = q(".score");
-    this.timer = q(".timer");
-    this.gps = q(".gps");
-    this.net = q(".net");
-    this.hp = q(".hpbar i");
-    this.crosshair = q(".crosshair");
-    this.feedEl = q(".feed");
-    this.bannerEl = q(".banner");
-    this.compass = q(".compass");
-    this.supply = q(".supply");
-    this.flashEl = q(".flash");
-    this.radar = q(".radar canvas");
-    this.placeMenu = q(".place-menu");
-
-    const fire = q<HTMLButtonElement>(".fire");
-    const fireHandler = (e: Event) => {
+    const fire = this.q<HTMLButtonElement>(".fire");
+    let holdTimer: number | null = null;
+    const startFire = (e: Event) => {
       e.preventDefault();
       cb.onFire();
+      if (holdTimer) clearInterval(holdTimer);
+      holdTimer = window.setInterval(() => cb.onFire(), 120);
     };
-    fire.addEventListener("pointerdown", fireHandler);
-    q(".place").addEventListener("click", () => (this.placeMenu.hidden = !this.placeMenu.hidden));
-    this.placeMenu.querySelectorAll<HTMLButtonElement>("button").forEach((b) =>
+    const stopFire = () => {
+      if (holdTimer) clearInterval(holdTimer);
+      holdTimer = null;
+    };
+    fire.addEventListener("pointerdown", startFire);
+    fire.addEventListener("pointerup", stopFire);
+    fire.addEventListener("pointercancel", stopFire);
+    fire.addEventListener("pointerleave", stopFire);
+    this.q(".fire2").addEventListener("pointerdown", (e) => {
+      e.preventDefault();
+      cb.onFireRocket();
+    });
+    this.q(".place").addEventListener("click", () => {
+      const m = this.q<HTMLElement>(".place-menu");
+      m.hidden = !m.hidden;
+    });
+    this.el.querySelectorAll<HTMLButtonElement>(".place-menu button").forEach((b) =>
       b.addEventListener("click", () => {
-        this.placeMenu.hidden = true;
-        cb.onPlace(b.dataset.kind as ObjectKind);
+        this.q<HTMLElement>(".place-menu").hidden = true;
+        cb.onPlace(b.dataset.kind as "turret" | "barrier" | "drone" | "medkit");
       }),
     );
-    q(".menu").addEventListener("click", () => cb.onMenu());
+    this.el.querySelectorAll<HTMLButtonElement>(".wbtn").forEach((b) =>
+      b.addEventListener("click", () => {
+        this.setWeapon(b.dataset.w as WeaponId);
+        cb.onWeapon(b.dataset.w as WeaponId);
+      }),
+    );
+    this.q(".menu").addEventListener("click", () => cb.onMenu());
   }
 
+  setWeapon(w: WeaponId): void {
+    this.el.querySelectorAll<HTMLButtonElement>(".wbtn").forEach((b) => b.classList.toggle("active", b.dataset.w === w));
+  }
   setScore(red: number, blue: number): void {
-    this.score.querySelector(".red")!.textContent = String(red);
-    this.score.querySelector(".blue")!.textContent = String(blue);
+    this.q(".score .red").textContent = String(red);
+    this.q(".score .blue").textContent = String(blue);
   }
   setTimer(text: string): void {
-    this.timer.textContent = text;
+    this.q(".timer").textContent = text;
   }
   setGps(acc: number | null, compass: boolean): void {
+    const g = this.q<HTMLElement>(".gps");
     if (acc === null) {
-      this.gps.textContent = "GPS…";
-      this.gps.className = "gps bad";
+      g.textContent = "GPS…";
+      g.className = "gps bad";
       return;
     }
-    this.gps.textContent = `±${Math.round(acc)}м${compass ? "" : " ⚠️компас"}`;
-    this.gps.className = "gps " + (acc <= 12 && compass ? "good" : "bad");
+    g.textContent = `±${Math.round(acc)}м${compass ? "" : " ⚠️компас"}`;
+    g.className = "gps " + (acc <= 12 && compass ? "good" : "bad");
   }
   setNet(rtt: number, connected: boolean): void {
-    this.net.textContent = connected ? `${Math.round(rtt)}ms` : "⛔";
+    this.q(".net").textContent = connected ? `${Math.round(rtt)}ms` : "⛔";
   }
-  setHp(hp: number): void {
-    this.hp.style.width = `${Math.max(0, (hp / GAME.MAX_HP) * 100)}%`;
-    this.hp.style.background = hp > 50 ? "var(--accent)" : hp > 25 ? "var(--warn)" : "var(--red)";
+  setVitals(hp: number, shield: number, ammo: number, supply: number): void {
+    const segs = this.el.querySelectorAll<HTMLElement>(".hpbar i");
+    segs.forEach((s, i) => {
+      const on = hp > i * 10;
+      s.classList.toggle("on", on);
+      s.classList.toggle("low", on && hp <= 30);
+    });
+    this.q(".hpnum").textContent = String(hp);
+    this.q<HTMLElement>(".hpnum").classList.toggle("low", hp <= 25);
+    this.q<HTMLElement>(".shieldbar i").style.width = `${Math.max(0, (shield / GAME.SHIELD_MAX) * 100)}%`;
+    this.q(".ammo").textContent = String(ammo);
+    this.q<HTMLElement>(".fire2").classList.toggle("empty", ammo <= 0);
+    this.q(".supply").textContent = String(supply);
+    this.q<HTMLElement>(".vignette").classList.toggle("low", hp <= 25 && hp > 0);
+    if (hp < this.lastHp) this.q<HTMLElement>(".hpbar").animate([{ transform: "translateX(-4px)" }, { transform: "translateX(4px)" }, { transform: "none" }], { duration: 160 });
+    this.lastHp = hp;
   }
-  setSupply(n: number): void {
-    this.supply.textContent = String(n);
+  setStreak(n: number): void {
+    const s = this.q<HTMLElement>(".streak");
+    s.hidden = n < 2;
+    s.querySelector("b")!.textContent = String(n);
   }
   setCrosshairHot(hot: boolean): void {
-    this.crosshair.classList.toggle("hot", hot);
+    this.q(".crosshair").classList.toggle("hot", hot);
+  }
+  hitMarker(kill = false): void {
+    const hm = this.q<HTMLElement>(".hm");
+    hm.className = "hm " + (kill ? "kill" : "hit");
+    void hm.offsetWidth;
+    hm.classList.add("show");
+    setTimeout(() => hm.classList.remove("show"), 180);
+  }
+  /** Directional damage indicator; rel = bearing relative to view (deg, + = right). */
+  damageFrom(rel: number, strength: number): void {
+    const d = this.q<HTMLElement>(".dmgdir");
+    d.style.setProperty("--a", `${rel}deg`);
+    d.style.setProperty("--s", String(Math.min(1, 0.4 + strength)));
+    d.classList.remove("show");
+    void d.offsetWidth;
+    d.classList.add("show");
   }
   setCompass(h: number): void {
-    this.compass.textContent = `${Math.round(h)}° ${cardinal(h)}`;
+    this.q(".compass").textContent = `${Math.round(h)}° ${cardinal(h)}`;
   }
   feed(text: string): void {
     const d = document.createElement("div");
     d.textContent = text;
-    this.feedEl.prepend(d);
-    while (this.feedEl.children.length > 5) this.feedEl.lastChild?.remove();
+    const f = this.q(".feed");
+    f.prepend(d);
+    while (f.children.length > 5) f.lastChild?.remove();
     setTimeout(() => d.remove(), 6000);
   }
-  banner(text: string | null, kind: "" | "warn" | "dead" = "", ms = 2500): void {
+  banner(text: string | null, kind: "" | "warn" | "dead" | "good" = "", ms = 2500): void {
     if (this.bannerTimer) clearTimeout(this.bannerTimer);
+    const b = this.q<HTMLElement>(".banner");
     if (!text) {
-      this.bannerEl.hidden = true;
+      b.hidden = true;
       return;
     }
-    this.bannerEl.textContent = text;
-    this.bannerEl.className = `banner ${kind}`;
-    this.bannerEl.hidden = false;
-    if (ms > 0) this.bannerTimer = window.setTimeout(() => (this.bannerEl.hidden = true), ms);
+    b.textContent = text;
+    b.className = `banner ${kind}`;
+    b.hidden = false;
+    if (ms > 0) this.bannerTimer = window.setTimeout(() => (b.hidden = true), ms);
   }
-  flash(): void {
-    this.flashEl.classList.add("on");
-    requestAnimationFrame(() => requestAnimationFrame(() => this.flashEl.classList.remove("on")));
+  flash(strength = 0.35): void {
+    const f = this.q<HTMLElement>(".flash");
+    f.style.setProperty("--f", String(strength));
+    f.classList.add("on");
+    requestAnimationFrame(() => requestAnimationFrame(() => f.classList.remove("on")));
   }
-
-  /** Top-down minimap: me at centre, "up" = my heading. */
+  /** Dead overlay with base direction. rel = relative bearing to base (deg), dist in m, secs to respawn. */
+  setDead(dead: boolean, by = "", rel = 0, dist = 0, secs = 0): void {
+    const d = this.q<HTMLElement>(".dead");
+    d.hidden = !dead;
+    if (!dead) return;
+    this.q(".dead-by").textContent = by;
+    this.q(".dead-timer").textContent = secs > 0 ? String(Math.ceil(secs)) : "";
+    this.q(".dead-hint").textContent = secs > 0 ? "Возрождение через" : "Иди на свою базу";
+    this.q<HTMLElement>(".dead-arrow").style.transform = `rotate(${rel}deg)`;
+    this.q(".dead-dist").textContent = `${Math.round(dist)} м до базы`;
+  }
   drawRadar(world: WorldState, heading: number): void {
-    const c = this.radar.getContext("2d");
+    const cv = this.q<HTMLCanvasElement>(".radar canvas");
+    const c = cv.getContext("2d");
     if (!c) return;
-    const W = this.radar.width;
+    const W = cv.width;
     const R = W / 2;
     const rangeM = GAME.RIFLE_RANGE_M;
     c.clearRect(0, 0, W, W);
@@ -151,7 +222,6 @@ export class Hud {
     c.beginPath();
     c.arc(R, R, R * 0.5, 0, Math.PI * 2);
     c.stroke();
-    // cone
     c.fillStyle = "rgba(74,222,128,0.12)";
     c.beginPath();
     c.moveTo(R, R);
@@ -163,7 +233,6 @@ export class Hud {
     const plot = (x: number, z: number) => {
       const dx = x - me.x;
       const dz = z - me.z;
-      // world: x east, z south(+). Rotate so heading is up.
       const ex = dx * Math.cos(rot) - -dz * Math.sin(rot);
       const ny = dx * Math.sin(rot) + -dz * Math.cos(rot);
       const k = (R * 0.95) / rangeM;
@@ -173,8 +242,17 @@ export class Hud {
     for (const o of world.objects.values()) {
       const { px, py, d } = plot(o.x, o.z);
       if (d > rangeM) continue;
-      c.fillStyle = o.team ? (o.team === "red" ? "#ef4444" : "#3b82f6") : "#fff";
-      c.fillRect(px - 3, py - 3, 6, 6);
+      c.fillStyle = o.team ? (o.team === "red" ? "#ef4444" : "#3b82f6") : "#fde047";
+      if (o.team) c.fillRect(px - 3, py - 3, 6, 6);
+      else {
+        c.beginPath();
+        c.moveTo(px, py - 4);
+        c.lineTo(px + 4, py);
+        c.lineTo(px, py + 4);
+        c.lineTo(px - 4, py);
+        c.closePath();
+        c.fill();
+      }
     }
     for (const p of world.players.values()) {
       if (p.id === world.myId || !p.alive) continue;
@@ -185,6 +263,15 @@ export class Hud {
       c.arc(px, py, 5, 0, Math.PI * 2);
       c.fill();
     }
+    if (world.room && myTeam) {
+      const b = world.room.bases[myTeam];
+      const { px, py } = plot(b.x, b.z);
+      const cx = Math.min(W - 6, Math.max(6, px));
+      const cy = Math.min(W - 6, Math.max(6, py));
+      c.strokeStyle = myTeam === "red" ? "#ef4444" : "#3b82f6";
+      c.lineWidth = 2;
+      c.strokeRect(cx - 4, cy - 4, 8, 8);
+    }
     c.fillStyle = "#fff";
     c.beginPath();
     c.moveTo(R, R - 8);
@@ -193,7 +280,6 @@ export class Hud {
     c.closePath();
     c.fill();
   }
-
   destroy(): void {
     this.el.remove();
   }

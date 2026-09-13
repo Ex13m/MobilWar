@@ -140,15 +140,15 @@ export function buildLabel(text: string, hp: number, maxHp: number, team: Team):
   return s;
 }
 
-export function updateLabel(s: THREE.Sprite, text: string, hp: number, maxHp: number, team: Team): void {
+export function updateLabel(s: THREE.Sprite, text: string, hp: number, maxHp: number, team: Team, shield = 0): void {
   const cv = s.userData.canvas as HTMLCanvasElement;
   const ctx = cv.getContext("2d")!;
   ctx.clearRect(0, 0, cv.width, cv.height);
-  drawLabel(ctx, text, hp, maxHp, team);
+  drawLabel(ctx, text, hp, maxHp, team, shield);
   (s.material.map as THREE.CanvasTexture).needsUpdate = true;
 }
 
-function drawLabel(ctx: CanvasRenderingContext2D, text: string, hp: number, maxHp: number, team: Team): void {
+function drawLabel(ctx: CanvasRenderingContext2D, text: string, hp: number, maxHp: number, team: Team, shield = 0): void {
   ctx.fillStyle = "rgba(0,0,0,0.55)";
   roundRect(ctx, 0, 0, 256, 80, 16);
   ctx.fill();
@@ -162,6 +162,11 @@ function drawLabel(ctx: CanvasRenderingContext2D, text: string, hp: number, maxH
   ctx.fillStyle = team === "red" ? "#ef4444" : "#3b82f6";
   roundRect(ctx, 24, 54, Math.max(8, 208 * Math.max(0, hp / maxHp)), 14, 7);
   ctx.fill();
+  if (shield > 0) {
+    ctx.fillStyle = "#38bdf8";
+    roundRect(ctx, 24, 50, Math.max(6, 208 * Math.min(1, shield / 50)), 5, 2);
+    ctx.fill();
+  }
 }
 
 function roundRect(ctx: CanvasRenderingContext2D, x: number, y: number, w: number, h: number, r: number): void {

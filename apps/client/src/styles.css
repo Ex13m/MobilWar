@@ -63,8 +63,6 @@ h2 { font-size: 18px; margin: 0 0 8px; }
 .hud .crosshair::after { content: ""; position: absolute; left: 50%; top: 50%; width: 4px; height: 4px; margin: -2px; background: var(--accent); border-radius: 50%; }
 .hud .crosshair.hot { border-color: var(--red); }
 .hud .bottom { position: absolute; bottom: max(12px, env(safe-area-inset-bottom)); left: 12px; right: 12px; display: flex; gap: 10px; align-items: flex-end; }
-.hud .hpbar { flex: 1; height: 14px; background: rgba(0,0,0,.5); border-radius: 999px; overflow: hidden; border: 1px solid #374151; }
-.hud .hpbar i { display: block; height: 100%; background: var(--accent); transition: width .2s; }
 .hud .fire { width: 84px; height: 84px; border-radius: 50%; background: radial-gradient(circle at 35% 35%, #f87171, #b91c1c); border: 4px solid rgba(255,255,255,.7); font-size: 0; box-shadow: 0 6px 20px rgba(0,0,0,.5); }
 .hud .fire:active { transform: scale(.94); }
 .hud .place { width: 56px; height: 56px; border-radius: 50%; background: #1f2937; border: 2px solid #4b5563; color: #fff; font-size: 22px; }
@@ -99,3 +97,51 @@ h2 { font-size: 18px; margin: 0 0 8px; }
 .marker-player { width: 16px; height: 16px; border-radius: 50%; border: 2px solid #fff; box-shadow: 0 0 6px #000; }
 .marker-obj { width: 14px; height: 14px; border: 2px solid #fff; transform: rotate(45deg); box-shadow: 0 0 6px #000; }
 @media (min-width: 700px) { .screen { max-width: 520px; margin: 0 auto; } }
+
+/* ---- HUD v2: vitals, weapons, hit feedback ---- */
+.hud .vignette { position: absolute; inset: 0; pointer-events: none; box-shadow: inset 0 0 0 0 transparent; }
+.hud .vignette.low { animation: lowhp 0.9s ease-in-out infinite; }
+@keyframes lowhp { 0%,100% { box-shadow: inset 0 0 40px 10px rgba(239,68,68,.25); } 50% { box-shadow: inset 0 0 90px 30px rgba(239,68,68,.55); } }
+.hud .dmgdir { position: absolute; left: 50%; top: 50%; width: 260px; height: 260px; margin: -130px 0 0 -130px; pointer-events: none; opacity: 0; transform: rotate(var(--a, 0deg));
+  background: conic-gradient(from -25deg, transparent 0deg, rgba(239,68,68,var(--s,.7)) 25deg, transparent 50deg); border-radius: 50%; -webkit-mask: radial-gradient(circle, transparent 58%, #000 62%, #000 100%); mask: radial-gradient(circle, transparent 58%, #000 62%, #000 100%); }
+.hud .dmgdir.show { animation: dmgdir .7s ease-out forwards; }
+@keyframes dmgdir { 0% { opacity: 1; } 100% { opacity: 0; } }
+.flash.on { opacity: var(--f, .35); }
+.hud .crosshair .hm { position: absolute; inset: -6px; opacity: 0; transform: scale(1.4); pointer-events: none; }
+.hud .crosshair .hm::before, .hud .crosshair .hm::after { content: ""; position: absolute; left: 50%; top: 50%; width: 3px; height: 30px; margin: -15px 0 0 -1.5px; background: #fff; }
+.hud .crosshair .hm::before { transform: rotate(45deg); } .hud .crosshair .hm::after { transform: rotate(-45deg); }
+.hud .crosshair .hm.kill::before, .hud .crosshair .hm.kill::after { background: var(--red); height: 40px; margin-top: -20px; }
+.hud .crosshair .hm.show { animation: hm .18s ease-out; }
+@keyframes hm { 0% { opacity: 1; transform: scale(1.6); } 100% { opacity: 0; transform: scale(1); } }
+.hud .streak { position: absolute; top: 64px; left: 50%; transform: translateX(-50%); background: var(--panel); border-radius: 999px; padding: 4px 12px; font-size: 12px; color: var(--warn); }
+.hud .bottom { align-items: flex-end; gap: 12px; }
+.hud .vitals { flex: 1; display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.hud .hpnum { font-size: 34px; font-weight: 900; line-height: 1; text-shadow: 0 2px 6px #000; font-variant-numeric: tabular-nums; }
+.hud .hpnum.low { color: var(--red); }
+.hud .hpbar { display: flex; gap: 3px; height: 16px; }
+.hud .hpbar i { flex: 1; background: rgba(255,255,255,.15); border-radius: 3px; transition: background .15s; }
+.hud .hpbar i.on { background: var(--accent); box-shadow: 0 0 8px rgba(74,222,128,.6); }
+.hud .hpbar i.on.low { background: var(--red); box-shadow: 0 0 8px rgba(239,68,68,.7); }
+.hud .shieldbar { height: 6px; background: rgba(255,255,255,.12); border-radius: 3px; overflow: hidden; }
+.hud .shieldbar i { display: block; height: 100%; width: 0; background: #38bdf8; box-shadow: 0 0 8px #38bdf8; transition: width .2s; }
+.hud .weapons { display: flex; gap: 6px; margin-top: 4px; }
+.hud .wbtn { flex: 1; background: var(--panel); border: 2px solid #374151; border-radius: 12px; color: var(--fg); padding: 6px 8px; text-align: left; line-height: 1.1; min-height: 44px; }
+.hud .wbtn b { display: block; font-size: 13px; }
+.hud .wbtn small { color: var(--muted); font-size: 12px; }
+.hud .wbtn.active { border-color: var(--accent); background: #14532d; }
+.hud .place { width: 44px; height: 44px; border-radius: 12px; background: #1f2937; border: 2px solid #4b5563; color: #fff; font-size: 18px; line-height: 1; }
+.hud .place .supply { font-size: 11px; display: block; }
+.hud .firecol { display: flex; flex-direction: column; gap: 10px; align-items: center; }
+.hud .fire2 { width: 60px; height: 60px; border-radius: 50%; background: radial-gradient(circle at 35% 35%, #fdba74, #c2410c); border: 3px solid rgba(255,255,255,.6); font-size: 24px; }
+.hud .fire2.empty { filter: grayscale(1); opacity: .5; }
+.hud .place-menu { position: absolute; bottom: 150px; left: 12px; display: flex; flex-direction: column; gap: 8px; }
+.hud .dead { position: absolute; inset: 0; background: rgba(8,10,14,.72); display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px; backdrop-filter: grayscale(1); }
+.hud .dead-title { font-size: 36px; font-weight: 900; color: var(--red); letter-spacing: .05em; }
+.hud .dead-by { color: var(--muted); }
+.hud .dead-timer { font-size: 64px; font-weight: 900; font-variant-numeric: tabular-nums; }
+.hud .dead-hint { color: var(--warn); }
+.hud .dead-arrow { font-size: 72px; color: var(--accent); transition: transform .2s; line-height: 1; transform-origin: 50% 50%; }
+.hud .dead-dist { font-size: 20px; font-weight: 700; }
+.banner.good { border: 2px solid var(--accent); color: var(--accent); }
+
+.hud [hidden] { display: none !important; }

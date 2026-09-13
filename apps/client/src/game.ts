@@ -1,4 +1,5 @@
-import { GAME, resolveShot, type ObjectKind, type PlayMode, type ServerMsg } from "@mobilwar/shared";
+import * as THREE from "three";
+import { GAME, angleDiff, bearingLocal, distLocal, resolveShot, type ObjectKind, type PlayMode, type ServerMsg, type WeaponId } from "@mobilwar/shared";
 import { ArScene } from "./ar/scene.js";
 import { CameraFeed } from "./ar/camera-feed.js";
 import { GameAudio } from "./audio.js";
@@ -9,6 +10,8 @@ import type { Sensors } from "./sensors.js";
 import { WorldState } from "./state.js";
 import { Hud, fmtTime } from "./ui/hud.js";
 import type { Profile } from "./storage.js";
+import { FX } from "./fx/effects.js";
+import { WEAPON_PRESETS, preload } from "./assets.js";
 
 export interface GameOptions {
   root: HTMLElement;
@@ -20,9 +23,11 @@ export interface GameOptions {
   onExit(): void;
 }
 
+type PlaceKind = Extract<ObjectKind, "turret" | "barrier" | "drone" | "medkit">;
+
 /**
  * Game session controller: joins the room, streams position, renders AR or the
- * screenless UI, handles fire/place, and reacts to server events.
+ * screenless UI, handles fire/place, and turns server events into feedback.
  */
 export class Game {
   private world = new WorldState();
@@ -34,12 +39,16 @@ export class Game {
   private posTimer: number | null = null;
   private offNet: (() => void) | null = null;
   private raf: number | null = null;
-  private lastShotAt = 0;
+  private lastShotAt: Record<WeaponId, number> = { blaster: 0, rocket: 0 };
   private lastFixSentT = 0;
   private wakeLock: WakeLockSentinel | null = null;
   private joined = false;
   private dead = false;
-
+  private deadBy = "";
+  private weapon: WeaponId = "blaster";
+  private streak = 0;
+  private lastSpeedFix: { x: number; z: number; t: number } | null = null;
+  private speed = 0;
   private net: Net;
 
   constructor(private o: GameOptions) {
@@ -52,21 +61,24 @@ export class Game {
     this.offNet = net.on((m) => this.onMsg(m));
     net.onOpen = () => this.join();
     net.connect();
+    void preload();
 
     if (o.playMode === "ar") {
-      root.insertAdjacentHTML("beforeend", `<video id="video" autoplay playsinline muted></video><canvas id="gl"></canvas>`);
+      root.insertAdjacentHTML("beforeend", `<video id="video" autoplay playsinline muted style="display:none"></video><canvas id="gl"></canvas>`);
       const video = root.querySelector<HTMLVideoElement>("#video")!;
       const canvas = root.querySelector<HTMLCanvasElement>("#gl")!;
       this.scene = new ArScene(canvas);
+      (window as unknown as { __mw?: unknown }).__mw = { scene: this.scene, world: this.world };
       this.hud = new Hud(root, {
-        onFire: () => this.fire(),
+        onFire: () => this.fire(this.weapon === "rocket" ? "blaster" : this.weapon),
+        onFireRocket: () => this.fire("rocket"),
+        onWeapon: (w) => this.selectWeapon(w),
         onPlace: (k) => this.place(k),
         onMenu: () => this.exit(),
       });
-      this.scene.onXrSelect = () => this.fire();
+      this.scene.onXrSelect = () => this.fire(this.weapon);
       const xr = await ArScene.xrSupported();
       if (xr) {
-        // Offer WebXR (Android Chrome). Falls back to AR-lite if the user declines / it fails.
         this.hud.banner("Нажми для запуска AR", "", 0);
         const once = async () => {
           root.removeEventListener("pointerdown", once);
@@ -110,7 +122,10 @@ export class Game {
   private async startArLite(video: HTMLVideoElement): Promise<void> {
     this.feed = new CameraFeed(video);
     const ok = await this.feed.start();
-    if (!ok) this.hud?.banner("Камера недоступна — режим радара", "warn", 4000);
+    if (ok) {
+      this.scene?.setVideo(video);
+      video.addEventListener("loadedmetadata", () => this.scene?.resize());
+    } else this.hud?.banner("Камера недоступна — режим радара", "warn", 4000);
   }
 
   private startScreenless(root: HTMLElement): void {
@@ -123,17 +138,29 @@ export class Game {
         <div class="target">Наведи телефон на противника</div>
         <div class="zone"><div class="big">—</div></div>
         <div class="sl-hp" style="color:#4ade80;font-weight:700">HP 100</div>
-        <p class="hint">Тап по экрану — выстрел. Слушай радар: чаще и выше — ближе, слева/справа — направление.</p>
+        <p class="hint">Тап — выстрел. Долгий тап — ракета. Встряхнуть — выстрел. Радар: чаще и выше — ближе; слева/справа — направление.</p>
         <button class="btn danger" style="margin-top:16px" id="sl-exit">Выйти</button>
       </div>`,
     );
     this.screenlessEl = root.querySelector(".screenless")!;
     this.screenless = new Screenless(this.world, this.o.audio);
+    let downAt = 0;
+    let longTimer: number | null = null;
     this.screenlessEl.addEventListener("pointerdown", (e) => {
       if ((e.target as HTMLElement).id === "sl-exit") return this.exit();
-      this.fire();
+      downAt = performance.now();
+      longTimer = window.setTimeout(() => {
+        longTimer = null;
+        this.fire("rocket");
+      }, 500);
     });
-    // Volume keys are not exposed to web pages; shake-to-fire as an alternative trigger.
+    this.screenlessEl.addEventListener("pointerup", () => {
+      if (longTimer) {
+        clearTimeout(longTimer);
+        longTimer = null;
+        if (performance.now() - downAt < 500) this.fire("blaster");
+      }
+    });
     window.addEventListener("devicemotion", this.onMotion, { passive: true });
   }
 
@@ -145,7 +172,7 @@ export class Game {
     const now = performance.now();
     if (mag > 18 && now - this.lastShake > 600) {
       this.lastShake = now;
-      this.fire();
+      this.fire("blaster");
     }
   };
 
@@ -160,24 +187,63 @@ export class Game {
     this.net.send({ type: "pos", lat: fix.lat, lon: fix.lon, acc: fix.acc, heading: this.o.sensors.orient.heading, ct: performance.now() });
   }
 
-  private fire(): void {
-    const now = performance.now();
-    if (now - this.lastShotAt < GAME.RIFLE_COOLDOWN_MS) return;
-    if (!this.world.me.alive) return;
-    this.lastShotAt = now;
-    const heading = this.o.sensors.orient.heading;
-    this.o.audio.shot();
-    this.net.send({ type: "shoot", heading, pitch: this.o.sensors.orient.pitch, ct: now });
-    // Immediate local tracer for responsiveness; server decides the hit.
-    this.scene?.tracer(this.world.me.x, this.world.me.z, heading, GAME.RIFLE_RANGE_M, 0xfde047, now);
+  private selectWeapon(w: WeaponId): void {
+    if (w === this.weapon) return;
+    this.weapon = w;
+    this.o.audio.weaponSwitch();
+    this.net.send({ type: "weapon", weapon: w });
+    void this.scene?.viewmodel.setWeapon(w);
+    this.hud?.setWeapon(w);
   }
 
-  private place(kind: ObjectKind): void {
+  private fire(w: WeaponId): void {
+    const now = performance.now();
+    const W = GAME.WEAPONS[w];
+    if (now - this.lastShotAt[w] < W.COOLDOWN_MS) return;
+    if (!this.world.me.alive) return;
+    if (w === "rocket" && this.world.me.ammo <= 0) {
+      this.o.audio.empty();
+      this.hud?.banner("Нет ракет — ищи боезапас", "warn", 1500);
+      return;
+    }
+    this.lastShotAt[w] = now;
+    const heading = this.o.sensors.orient.heading;
+    this.o.audio.shot(w);
+    this.net.send({ type: "shoot", weapon: w, heading, pitch: this.o.sensors.orient.pitch, ct: now });
+    if (this.scene) {
+      if (w !== this.scene.viewmodel.current) void this.scene.viewmodel.setWeapon(w);
+      this.scene.viewmodel.fire();
+      if (w === "blaster") {
+        // Immediate local bolt from the muzzle; the server decides the hit.
+        const from = this.scene.muzzleInWorld();
+        const hot = this.aimTarget();
+        const preset = WEAPON_PRESETS.blaster;
+        this.scene.bolt(this.world.me.x, this.world.me.z, heading, W.RANGE_M, preset.boltColor, hot ? { x: hot.x, z: hot.z } : undefined, from);
+      }
+    }
+  }
+
+  private aimTarget(): { id: string; x: number; z: number } | null {
+    const hot = resolveShot(
+      { x: this.world.me.x, z: this.world.me.z, acc: this.world.me.acc },
+      this.o.sensors.orient.heading,
+      this.world.enemies().map((e) => ({ id: e.id, x: e.rx, z: e.rz, acc: e.acc })),
+    );
+    if (!hot) return null;
+    const p = this.world.players.get(hot.id);
+    return p ? { id: p.id, x: p.rx, z: p.rz } : null;
+  }
+
+  private place(kind: PlaceKind): void {
     this.net.send({ type: "place", kind });
   }
 
+  /** Relative bearing (deg, + = right) from my view to a world point. */
+  private relTo(x: number, z: number): number {
+    return angleDiff(bearingLocal(this.world.me, { x, z }), this.o.sensors.orient.heading);
+  }
+
   private onMsg(m: ServerMsg): void {
-    const now = performance.now();
     switch (m.type) {
       case "welcome":
         this.world.myId = m.playerId;
@@ -187,43 +253,45 @@ export class Game {
       case "snapshot":
         this.world.applySnapshot(m.snap);
         break;
-      case "shot": {
-        if (m.shooterId === this.world.myId) {
-          if (m.targetId) {
-            this.o.audio.hitConfirm();
-            this.hud?.feed(`Попадание −${m.damage}`);
-          }
-          break;
-        }
-        const src = this.world.players.get(m.shooterId) ?? this.world.objects.get(m.shooterId);
-        const d = src ? Math.hypot(m.x - this.world.me.x, m.z - this.world.me.z) : 50;
-        this.o.audio.remoteShot(d);
-        let tpos: { x: number; z: number } | undefined;
-        if (m.targetId === this.world.myId) tpos = { x: this.world.me.x, z: this.world.me.z };
-        else if (m.targetId) {
-          const tp = this.world.players.get(m.targetId);
-          if (tp) tpos = { x: tp.rx, z: tp.rz };
-        }
-        this.scene?.tracer(m.x, m.z, m.heading, GAME.RIFLE_RANGE_M, m.targetId ? 0xef4444 : 0xffffff, now, tpos);
+      case "shot":
+        this.onShot(m);
         break;
-      }
-      case "hit":
-        this.o.audio.gotHit();
-        this.hud?.flash();
+      case "hit": {
+        const attacker = this.world.players.get(m.by);
+        const dmgStr = m.damage;
+        if (attacker) this.hud?.damageFrom(this.relTo(attacker.rx, attacker.rz), dmgStr / 50);
+        else {
+          const obj = this.world.objects.get(m.by);
+          if (obj) this.hud?.damageFrom(this.relTo(obj.x, obj.z), dmgStr / 50);
+        }
+        if (this.world.me.shield > 0 && dmgStr === 0) this.o.audio.shieldHit();
+        else this.o.audio.gotHit(dmgStr);
+        this.hud?.flash(Math.min(0.6, 0.15 + dmgStr / 60));
+        this.scene?.addShake(0.6 + dmgStr / 25);
         this.world.me.hp = m.hp;
         break;
+      }
       case "kill": {
-        const k = this.world.players.get(m.killerId)?.nick ?? (m.killerId === "turret" ? "Турель" : "?");
-        const v = this.world.players.get(m.victimId)?.nick ?? "?";
+        const k = this.world.players.get(m.killerId)?.nick ?? (m.killerId === "turret" ? "Турель" : m.killerId === "drone" ? "Дрон" : "?");
+        const v = this.world.players.get(m.victimId)?.nick ?? (m.victimId === this.world.myId ? "тебя" : "?");
+        const wname = m.weapon === "rocket" ? "ракетой" : m.weapon === "turret" ? "турелью" : m.weapon === "drone" ? "дроном" : "бластером";
         this.hud?.feed(`${k} ✕ ${v}`);
         if (m.victimId === this.world.myId) {
           this.dead = true;
+          this.deadBy = `${k} · ${wname}`;
+          this.streak = 0;
+          this.hud?.setStreak(0);
           this.o.audio.death();
-          this.hud?.banner(`Ты выбыл. Возрождение ${GAME.RESPAWN_MS / 1000} с`, "dead", GAME.RESPAWN_MS);
-          this.o.audio.say("Ты выбыл. Жди возрождения");
+          this.o.audio.heartbeat(false);
+          this.o.audio.say("Ты выбыл. Иди на базу");
+          if (this.scene) this.scene.viewmodel.visible = false;
         } else if (m.killerId === this.world.myId) {
+          this.streak++;
+          this.hud?.setStreak(this.streak);
+          this.hud?.hitMarker(true);
+          this.hud?.banner(`✕ ${v}`, "good", 1500);
           this.o.audio.kill();
-          this.o.audio.say(`Ты поразил ${v}`);
+          this.o.audio.say(this.streak >= 3 ? `Серия ${this.streak}` : `Ты поразил ${v}`);
         }
         break;
       }
@@ -242,6 +310,7 @@ export class Game {
           this.join();
           break;
         }
+        if (m.code === "cant_place") this.o.audio.empty();
         this.hud?.banner(m.text, "warn", 3000);
         if (m.code === "no_room" || m.code === "kicked" || m.code === "room_full") {
           alert(m.text);
@@ -249,6 +318,43 @@ export class Game {
         }
         break;
     }
+  }
+
+  private onShot(m: Extract<ServerMsg, { type: "shot" }>): void {
+    const mine = m.shooterId === this.world.myId;
+    if (mine) {
+      if (m.targetId && m.damage) {
+        this.o.audio.hitConfirm();
+        this.hud?.hitMarker(false);
+        const pos = this.scene?.playerPos(m.targetId) ?? (this.world.objects.get(m.targetId) ? new THREE.Vector3(this.world.objects.get(m.targetId)!.x, 1, this.world.objects.get(m.targetId)!.z) : null);
+        if (pos && this.scene) {
+          const shielded = (this.world.players.get(m.targetId)?.shield ?? 0) > 0;
+          this.scene.fx.damageNumber(pos.clone().add(new THREE.Vector3((Math.random() - 0.5) * 0.6, 0.4, 0)), `-${m.damage}`, shielded ? "#38bdf8" : "#fff");
+          this.scene.fx.hitSpark(pos, shielded ? FX.shield : FX.hit);
+        }
+      } else if (m.blockedBy) {
+        const b = this.world.objects.get(m.blockedBy);
+        if (b && this.scene) this.scene.fx.hitSpark(new THREE.Vector3(b.x, 0.9, b.z), 0xffc060);
+      }
+      return;
+    }
+    // Someone else (or a turret/drone) fired: sound by distance, visible bolt.
+    const d = Math.hypot(m.x - this.world.me.x, m.z - this.world.me.z);
+    const rel = this.relTo(m.x, m.z) * (Math.PI / 180);
+    this.o.audio.remoteShot(m.weapon, { x: Math.sin(rel) * Math.min(d, 30), z: -Math.cos(rel) * Math.min(d, 30) }, d);
+    if (!this.scene || m.weapon === "rocket") return;
+    const color = m.weapon === "turret" ? FX.turret : m.weapon === "drone" ? FX.drone : this.world.players.get(m.shooterId)?.team === "red" ? FX.blasterRed : FX.blasterBlue;
+    let target: { x: number; z: number } | undefined;
+    if (m.targetId === this.world.myId) target = { x: this.world.me.x, z: this.world.me.z };
+    else if (m.targetId) {
+      const tp = this.world.players.get(m.targetId);
+      const to = this.world.objects.get(m.targetId);
+      if (tp) target = { x: tp.rx, z: tp.rz };
+      else if (to) target = { x: to.x, z: to.z };
+    }
+    const from = new THREE.Vector3(m.x, m.weapon === "drone" ? 3 : m.weapon === "turret" ? 0.8 : 1.3, m.z);
+    const hitMe = m.targetId === this.world.myId;
+    this.scene.bolt(m.x, m.z, m.heading, GAME.RIFLE_RANGE_M, color, target, from, hitMe ? () => this.scene?.fx.hitSpark(new THREE.Vector3(this.world.me.x, 1.2, this.world.me.z), FX.hit) : undefined);
   }
 
   private onEvent(kind: string, data?: Record<string, unknown>): void {
@@ -261,7 +367,56 @@ export class Game {
       infected: "Заражение!",
       object_placed: "Объект установлен",
       object_destroyed: "Объект уничтожен",
+      pickup_spawned: "Появился бонус",
     };
+    switch (kind) {
+      case "explosion": {
+        const x = Number(data?.x);
+        const z = Number(data?.z);
+        const r = Number(data?.r ?? 6);
+        const d = Math.hypot(x - this.world.me.x, z - this.world.me.z);
+        const rel = this.relTo(x, z) * (Math.PI / 180);
+        this.o.audio.explosion(d, { x: Math.sin(rel) * Math.min(d, 30), z: -Math.cos(rel) * Math.min(d, 30) });
+        if (this.scene) {
+          this.scene.fx.explosion(new THREE.Vector3(x, 0, z), r);
+          this.scene.addShake(Math.max(0, 3 - d / 6));
+        }
+        const victims = (data?.victims as Array<{ id: string; damage: number }> | undefined) ?? [];
+        if (data?.by === this.world.myId && victims.length) {
+          this.hud?.hitMarker(false);
+          this.o.audio.hitConfirm();
+          for (const v of victims) {
+            const pos = this.scene?.playerPos(v.id);
+            if (pos) this.scene?.fx.damageNumber(pos, `-${v.damage}`, "#ffb060");
+          }
+        }
+        return;
+      }
+      case "pickup": {
+        const who = data?.by === this.world.myId;
+        const k = String(data?.kind);
+        const names: Record<string, string> = { medkit: "Аптечка +50", ammo: "Боезапас +2 ракеты", shield: "Щит 50", overcharge: "Overcharge ×2 урон", supply: "Снабжение +2" };
+        if (who) {
+          this.o.audio.pickup(k);
+          this.hud?.banner(names[k] ?? k, "good", 1800);
+          this.o.audio.say(names[k] ?? k);
+        } else this.hud?.feed(`${this.world.players.get(String(data?.by))?.nick ?? "?"} подобрал: ${names[k] ?? k}`);
+        return;
+      }
+      case "respawn":
+        if (data?.id === this.world.myId) {
+          this.dead = false;
+          this.hud?.setDead(false);
+          this.hud?.banner("В бой! Защита 3 с", "good", 2000);
+          this.o.audio.respawn();
+          if (this.scene) this.scene.viewmodel.visible = true;
+        }
+        return;
+      case "object_placed":
+        if (data?.by === this.world.myId) this.o.audio.placed();
+        this.hud?.feed(txt[kind]!);
+        return;
+    }
     const t = txt[kind] ?? kind;
     this.hud?.feed(t);
     if (kind === "round_start" || kind === "round_end") {
@@ -279,40 +434,45 @@ export class Game {
     if (fix && fix.t !== this.lastFixSentT && this.world.room) {
       this.world.pushMyFix(fix.lat, fix.lon, fix.acc, fix.t);
       this.lastFixSentT = fix.t;
+      if (this.lastSpeedFix) {
+        const dt = (fix.t - this.lastSpeedFix.t) / 1000;
+        if (dt > 0.3) this.speed = 0.6 * this.speed + 0.4 * (distLocal(this.world.me, this.lastSpeedFix) / dt);
+      }
+      this.lastSpeedFix = { x: this.world.me.x, z: this.world.me.z, t: fix.t };
     }
     this.world.interpolate(net.serverNow());
     const heading = sensors.orient.heading;
     this.world.me.heading = heading;
+    const serverNow = net.serverNow();
 
-    // Respawn detection for banner clearing
-    if (this.dead && this.world.me.alive) {
-      this.dead = false;
-      this.hud?.banner(null);
-      audio.respawn();
-    }
+    audio.heartbeat(this.world.me.alive && this.world.me.hp > 0 && this.world.me.hp <= 25);
 
     if (this.scene && this.hud) {
       this.scene.updateView(sensors.orient, this.world.me, heading);
-      this.scene.sync(this.world, now);
+      this.scene.viewmodel.update(this.scene ? Math.min(0.05, 1 / 60) : 0.016, this.speed);
+      this.scene.sync(this.world, serverNow);
       this.scene.render();
       const room = this.world.room;
       if (room) {
         this.hud.setScore(room.score.red, room.score.blue);
-        this.hud.setTimer(room.phase === "playing" ? fmtTime(room.phaseEndsAt - net.serverNow()) : room.phase === "countdown" ? "старт…" : room.phase === "ended" ? "конец" : "лобби");
+        this.hud.setTimer(room.phase === "playing" ? fmtTime(room.phaseEndsAt - serverNow) : room.phase === "countdown" ? "старт…" : room.phase === "ended" ? "конец" : "лобби");
       }
       this.hud.setGps(fix ? fix.acc : null, sensors.hasCompass);
       this.hud.setNet(net.rtt, net.connected);
-      this.hud.setHp(this.world.me.hp);
-      this.hud.setCompass(heading);
       const me = this.world.myPlayer();
-      if (me) this.hud.setSupply(me.supply);
-      const hot = resolveShot(
-        { x: this.world.me.x, z: this.world.me.z, acc: this.world.me.acc },
-        heading,
-        this.world.enemies().map((e) => ({ id: e.id, x: e.rx, z: e.rz, acc: e.acc })),
-      );
-      this.hud.setCrosshairHot(!!hot);
+      this.hud.setVitals(this.world.me.hp, this.world.me.shield, this.world.me.ammo, me?.supply ?? 0);
+      this.hud.setCompass(heading);
+      this.hud.setCrosshairHot(!!this.aimTarget());
       this.hud.drawRadar(this.world, heading);
+      if (!this.world.me.alive && room && me) {
+        const base = room.bases[me.team];
+        const secs = Math.max(0, (this.world.me.respawnAt - serverNow) / 1000);
+        this.hud.setDead(true, this.deadBy, this.relTo(base.x, base.z), distLocal(this.world.me, base), secs);
+      } else if (this.dead && this.world.me.alive) {
+        this.dead = false;
+        this.hud.setDead(false);
+        if (this.scene) this.scene.viewmodel.visible = true;
+      }
     } else if (this.screenless && this.screenlessEl) {
       const r = this.screenless.update(heading, now);
       const zone = this.screenlessEl.querySelector(".zone")!;
@@ -320,17 +480,14 @@ export class Game {
       const target = this.screenlessEl.querySelector(".target")!;
       zone.className = "zone " + (r.locked ? "lock" : r.closeness > 0.7 ? "near" : "");
       big.textContent = r.targetId ? `${Math.round(r.distance)}м` : "—";
-      target.textContent = r.targetId
-        ? `${this.world.players.get(r.targetId)?.nick ?? ""} ${r.rel > 8 ? "→ правее" : r.rel < -8 ? "← левее" : "● в прицеле"}`
-        : "Противников рядом нет";
+      target.textContent = r.targetId ? `${this.world.players.get(r.targetId)?.nick ?? ""} ${r.rel > 8 ? "→ правее" : r.rel < -8 ? "← левее" : "● в прицеле"}` : "Противников рядом нет";
       const room = this.world.room;
       if (room) {
         this.screenlessEl.querySelector(".sl-score")!.textContent = `${room.score.red} : ${room.score.blue}`;
-        this.screenlessEl.querySelector(".sl-timer")!.textContent =
-          room.phase === "playing" ? fmtTime(room.phaseEndsAt - net.serverNow()) : { lobby: "лобби", countdown: "старт…", ended: "конец", playing: "" }[room.phase];
+        this.screenlessEl.querySelector(".sl-timer")!.textContent = room.phase === "playing" ? fmtTime(room.phaseEndsAt - serverNow) : { lobby: "лобби", countdown: "старт…", ended: "конец", playing: "" }[room.phase];
       }
       this.screenlessEl.querySelector(".sl-gps")!.textContent = fix ? `±${Math.round(fix.acc)}м` : "GPS…";
-      this.screenlessEl.querySelector(".sl-hp")!.textContent = this.world.me.alive ? `HP ${this.world.me.hp}` : "ВЫБЫЛ";
+      this.screenlessEl.querySelector(".sl-hp")!.textContent = this.world.me.alive ? `HP ${this.world.me.hp}${this.world.me.shield ? ` · щит ${this.world.me.shield}` : ""} · 🚀${this.world.me.ammo}` : "ВЫБЫЛ — иди на базу";
     }
   }
 
@@ -344,6 +501,7 @@ export class Game {
     if (this.raf) cancelAnimationFrame(this.raf);
     this.offNet?.();
     this.net.close();
+    this.o.audio.heartbeat(false);
     this.scene?.endXr();
     this.scene?.dispose();
     this.feed?.stop();

@@ -1,9 +1,12 @@
 import type { LatLon } from "./geo";
-import type { AvatarId, Team } from "./constants";
+import type { AvatarId, Team, WeaponId } from "./constants";
 
 export type GameMode = "tdm" | "ctf" | "koth" | "infection" | "turret_defense";
 export type PlayMode = "ar" | "screenless" | "referee";
-export type ObjectKind = "turret" | "barrier" | "medkit" | "flag";
+/** Placeable (turret/barrier/drone/medkit), mode objects (flag) and pickups. */
+export type ObjectKind = "turret" | "barrier" | "drone" | "medkit" | "flag" | "ammo" | "shield" | "overcharge" | "supply";
+export const PICKUP_KINDS = ["medkit", "ammo", "shield", "overcharge", "supply"] as const;
+export type PickupKind = (typeof PICKUP_KINDS)[number];
 
 export interface PlayerPublic {
   id: string;
@@ -26,6 +29,31 @@ export interface PlayerPublic {
   /** Server timestamp of last position update. */
   t: number;
   hasFlag?: boolean;
+  /** Shield points (absorbed before HP). */
+  shield: number;
+  /** Rockets left. */
+  ammo: number;
+  /** Currently selected weapon (for viewmodels on other clients). */
+  weapon: WeaponId;
+  /** Epoch ms until which the overcharge buff is active (0 = none). */
+  overchargeUntil: number;
+  /** Epoch ms until which spawn protection is active. */
+  protectedUntil: number;
+  /** Epoch ms when respawn becomes possible (0 when alive). */
+  respawnAt: number;
+}
+
+export interface Projectile {
+  id: string;
+  kind: "rocket";
+  ownerId: string;
+  team: Team;
+  x: number;
+  z: number;
+  y: number;
+  heading: number;
+  /** Server time of launch. */
+  t0: number;
 }
 
 export interface WorldObject {
@@ -40,6 +68,15 @@ export interface WorldObject {
   heading?: number;
   /** For flags: whether currently carried. */
   carriedBy?: string | null;
+  /** Height above ground (drones), metres. */
+  y?: number;
+  /** Epoch ms when the object expires (pickups, drones). */
+  expiresAt?: number;
+}
+
+export interface BaseInfo {
+  x: number;
+  z: number;
 }
 
 export interface RoomInfo {
@@ -55,6 +92,8 @@ export interface RoomInfo {
   phaseEndsAt: number;
   score: Record<Team, number>;
   playerCount: number;
+  /** Team bases (local coords). Dead players respawn by walking to their base. */
+  bases: Record<Team, BaseInfo>;
 }
 
 export interface Snapshot {
@@ -62,6 +101,7 @@ export interface Snapshot {
   room: RoomInfo;
   players: PlayerPublic[];
   objects: WorldObject[];
+  projectiles: Projectile[];
 }
 
 /* ---------- Client → Server ---------- */
@@ -89,15 +129,21 @@ export interface PosMsg {
 
 export interface ShootMsg {
   type: "shoot";
+  weapon?: WeaponId;
   heading: number;
   /** Pitch in degrees, positive = up. Used only for AR feedback; hits are 2D. */
   pitch: number;
   ct: number;
 }
 
+export interface SelectWeaponMsg {
+  type: "weapon";
+  weapon: WeaponId;
+}
+
 export interface PlaceObjectMsg {
   type: "place";
-  kind: ObjectKind;
+  kind: "turret" | "barrier" | "drone" | "medkit";
   /** Optional explicit position; defaults to player's current position + 2 m ahead. */
   lat?: number;
   lon?: number;
@@ -135,6 +181,7 @@ export type ClientMsg =
   | JoinMsg
   | PosMsg
   | ShootMsg
+  | SelectWeaponMsg
   | PlaceObjectMsg
   | RefereeCmdMsg
   | PingMsg
@@ -158,6 +205,7 @@ export interface SnapshotMsg {
 /** Fired when a shot happens (for visuals/audio on all clients). */
 export interface ShotEventMsg {
   type: "shot";
+  weapon: WeaponId | "turret" | "drone";
   shooterId: string;
   x: number;
   z: number;
@@ -166,6 +214,8 @@ export interface ShotEventMsg {
   targetId?: string;
   targetKind?: "player" | "object";
   damage?: number;
+  /** Shot was stopped by a barrier at this point. */
+  blockedBy?: string;
 }
 
 export interface HitMsg {
@@ -180,7 +230,7 @@ export interface KillMsg {
   type: "kill";
   killerId: string;
   victimId: string;
-  weapon: "rifle" | "turret";
+  weapon: WeaponId | "turret" | "drone";
 }
 
 export interface EventMsg {
@@ -194,7 +244,11 @@ export interface EventMsg {
     | "round_start"
     | "round_end"
     | "object_placed"
-    | "object_destroyed";
+    | "object_destroyed"
+    | "explosion"
+    | "pickup"
+    | "pickup_spawned"
+    | "respawn";
   data?: Record<string, unknown>;
 }
 

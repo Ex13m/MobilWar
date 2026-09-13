@@ -63,7 +63,7 @@ export class Effects {
 
   /** A glowing bolt flying from → to (world coords). Speed in m/s. */
   bolt(from: THREE.Vector3, to: THREE.Vector3, color: number, speed = 70, onArrive?: () => void): void {
-    const mat = new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.95, blending: THREE.AdditiveBlending, depthWrite: false });
+    const mat = new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.95, blending: THREE.AdditiveBlending, depthWrite: false, toneMapped: false });
     const mesh = new THREE.Mesh(this.boltGeo, mat);
     mesh.position.copy(from);
     mesh.lookAt(to);
@@ -97,9 +97,9 @@ export class Effects {
   }
 
   explosion(pos: THREE.Vector3, radius: number): void {
-    const core = new THREE.Mesh(this.sphereGeo, new THREE.MeshBasicMaterial({ color: 0xffd08a, transparent: true, opacity: 1, blending: THREE.AdditiveBlending, depthWrite: false }));
+    const core = new THREE.Mesh(this.sphereGeo, new THREE.MeshBasicMaterial({ color: 0xff7a1f, transparent: true, opacity: 0.9, blending: THREE.AdditiveBlending, depthWrite: false, toneMapped: false }));
     core.position.copy(pos).setY(pos.y + 0.6);
-    const ring = new THREE.Mesh(this.ringGeo, new THREE.MeshBasicMaterial({ color: 0xffa53b, transparent: true, opacity: 0.9, side: THREE.DoubleSide, blending: THREE.AdditiveBlending, depthWrite: false }));
+    const ring = new THREE.Mesh(this.ringGeo, new THREE.MeshBasicMaterial({ color: 0xffa53b, transparent: true, opacity: 0.8, side: THREE.DoubleSide, blending: THREE.AdditiveBlending, depthWrite: false, toneMapped: false }));
     ring.rotation.x = -Math.PI / 2;
     ring.position.copy(pos).setY(0.1);
     const light = new THREE.PointLight(0xffa040, 40, radius * 4, 2);
@@ -162,10 +162,10 @@ export class Effects {
       f.t += dt;
       const k = Math.min(1, f.t / f.dur);
       const s = f.radius * (0.3 + 0.7 * Math.sqrt(k));
-      f.core.scale.setScalar(s * 0.45);
-      (f.core.material as THREE.MeshBasicMaterial).opacity = 1 - k;
+      f.core.scale.setScalar(s * 0.22);
+      (f.core.material as THREE.MeshBasicMaterial).opacity = 0.9 * (1 - k) * (1 - k);
       f.ring.scale.setScalar(s * 1.2);
-      (f.ring.material as THREE.MeshBasicMaterial).opacity = 0.9 * (1 - k);
+      (f.ring.material as THREE.MeshBasicMaterial).opacity = 0.8 * (1 - k);
       f.light.intensity = 40 * (1 - k);
       if (k >= 1) {
         this.scene.remove(f.core, f.ring, f.light);

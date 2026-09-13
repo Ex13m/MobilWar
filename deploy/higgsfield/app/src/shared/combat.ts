@@ -63,6 +63,49 @@ export function resolveShot(
   return best;
 }
 
+/**
+ * Distance from point p to segment a-b (2D ground plane).
+ */
+export function distToSegment(p: Vec2, a: Vec2, b: Vec2): number {
+  const abx = b.x - a.x;
+  const abz = b.z - a.z;
+  const len2 = abx * abx + abz * abz;
+  let t = len2 === 0 ? 0 : ((p.x - a.x) * abx + (p.z - a.z) * abz) / len2;
+  t = Math.max(0, Math.min(1, t));
+  return Math.hypot(p.x - (a.x + abx * t), p.z - (a.z + abz * t));
+}
+
+/**
+ * First barrier whose blocking disc intersects the shot line from `from` towards `to`.
+ * Barriers within 1 m of the shooter don't block (you can shoot over your own cover).
+ */
+export function firstBarrierOnPath<T extends Vec2 & { id: string }>(from: Vec2, to: Vec2, barriers: T[], blockRadius: number = GAME.BARRIER_BLOCK_M): T | null {
+  let best: T | null = null;
+  let bestD = Infinity;
+  for (const b of barriers) {
+    const dShooter = distLocal(from, b);
+    if (dShooter < 1.0) continue;
+    if (distToSegment(b, from, to) > blockRadius) continue;
+    if (dShooter < bestD) {
+      best = b;
+      bestD = dShooter;
+    }
+  }
+  return best;
+}
+
+/** End point of a ray from `from` along `heading` at distance `len`. */
+export function rayEnd(from: Vec2, heading: number, len: number): Vec2 {
+  const h = (heading * Math.PI) / 180;
+  return { x: from.x + Math.sin(h) * len, z: from.z - Math.cos(h) * len };
+}
+
+/** Splash damage: `center` at 0 m falling linearly to `edge` at `radius`; 0 beyond. */
+export function splashDamage(dist: number, radius: number, center: number, edge: number): number {
+  if (dist >= radius) return 0;
+  return Math.round(center + (edge - center) * (dist / radius));
+}
+
 /** Damage falloff: full up to 60% of range, then linear to 40% at max range. */
 export function damageAtDistance(base: number, dist: number, rangeM: number): number {
   const knee = rangeM * 0.6;

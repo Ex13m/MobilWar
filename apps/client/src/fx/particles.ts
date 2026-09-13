@@ -101,6 +101,7 @@ export class ParticleSystem {
       transparent: true,
       depthWrite: false,
       blending: THREE.AdditiveBlending,
+      toneMapped: false,
     });
     this.points = new THREE.Points(this.geo, mat);
     this.points.frustumCulled = false;
