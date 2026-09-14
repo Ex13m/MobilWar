@@ -34,10 +34,12 @@ export class Hud {
         <div class="dmgdir"></div>
         <div class="top">
           <div class="score"><span class="red">0</span>:<span class="blue">0</span> <span class="timer">--:--</span></div>
-          <div class="status"><span class="gps">GPS…</span><span class="net">⇄</span></div>
+          <div class="topright">
+            <div class="status"><span class="gps">GPS…</span><span class="net">⇄</span></div>
+            <button class="btn secondary menu" style="min-height:36px;padding:6px 10px">☰</button>
+          </div>
         </div>
-        <button class="btn secondary menu" style="min-height:36px;padding:6px 10px">☰</button>
-        <div class="compass">— °</div>
+        <div class="compass"><b>—</b>°<span>—</span></div>
         <div class="streak" hidden>серия <b>0</b></div>
         <div class="feed"></div>
         <div class="radar"><canvas width="192" height="192"></canvas></div>
@@ -278,7 +280,11 @@ export class Hud {
     d.classList.add("show");
   }
   setCompass(h: number): void {
-    this.q(".compass").textContent = `${Math.round(h)}° ${cardinal(h)}`;
+    const c = this.q(".compass");
+    // Split so the bearing reads as an instrument. As one string the degree
+    // sign next to a cardinal letter looked like a temperature.
+    c.querySelector("b")!.textContent = String(Math.round(h)).padStart(3, "0");
+    c.querySelector("span")!.textContent = cardinal(h);
   }
   feed(text: string): void {
     const d = document.createElement("div");

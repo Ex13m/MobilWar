@@ -201,7 +201,50 @@ const HEAVIES: Row[] = [
   ["Ноль-Т", "тренировочная: 1 урон", "none", 1, 1000, 40, 12, 5, 500, "rocket2", 0xffffff, 1.0, { splashM: 6, damageEdge: 1, fuseM: 3, speedMps: 22 }],
 ];
 
+/**
+ * Total damage a full load (magazine plus spares) is allowed to deliver, per
+ * slot. Spare rounds are derived from this rather than authored, so the harder
+ * a weapon hits the fewer rounds it carries: a 45-damage sniper round is worth
+ * many pistol rounds, and the ammo economy says so.
+ */
+const AMMO_BUDGET: Record<Slot, number> = { pistol: 600, blaster: 1400, sniper: 900, rocket: 0 };
+
+/** Stable 0..1 hash of a weapon id, used to break ties in derived numbers. */
+function idHash(id: string): number {
+  let h = 2166136261;
+  for (let i = 0; i < id.length; i++) {
+    h ^= id.charCodeAt(i);
+    h = Math.imul(h, 16777619);
+  }
+  return ((h >>> 0) % 10000) / 10000;
+}
+
+/**
+ * Spare rounds carried beyond the loaded magazine.
+ * Always at least one spare magazine and never more than six, so a weak weapon
+ * does not turn into an infinite one and a strong one still gets a second life.
+ */
+function spareRounds(slot: Slot, damage: number, mag: number, pellets: number): number {
+  const budget = AMMO_BUDGET[slot];
+  if (budget <= 0) return 0; // the heavy slot is fed by pickups, not by spares
+  const perRound = Math.max(1, damage * Math.max(1, pellets));
+  const rounds = Math.ceil(budget / perRound) - mag;
+  return Math.max(mag, Math.min(mag * 6, Math.round(rounds / mag) * mag || mag));
+}
+
+/**
+ * Reload time. The authored value sets the band; a bigger magazine takes longer
+ * to seat and a small per-weapon offset keeps any two weapons in a slot from
+ * feeling identical.
+ */
+function reloadTime(base: number, id: string, mag: number, slotMaxMag: number): number {
+  const bulk = 0.85 + 0.3 * Math.min(1, mag / Math.max(1, slotMaxMag));
+  const jitter = 1 + (idHash(id) - 0.5) * 0.18;
+  return Math.round((base * bulk * jitter) / 10) * 10;
+}
+
 function build(slot: Slot, rows: Row[]): WeaponDef[] {
+  const slotMaxMag = rows.reduce((m, r) => Math.max(m, r[7]), 1);
   return rows.map((r, i) => {
     const [name, blurb, trait, damage, cooldownMs, rangeM, cone, mag, reloadMs, model, color, pitch, extra] = r;
     const base: WeaponDef = {
@@ -218,8 +261,8 @@ function build(slot: Slot, rows: Row[]): WeaponDef[] {
       bloom: slot === "blaster" ? 0.8 : 0,
       bloomDecay: slot === "blaster" ? 10 : 0,
       mag,
-      reserve: slot === "pistol" ? -1 : slot === "blaster" ? mag * 4 : slot === "sniper" ? mag * 4 : 0,
-      reloadMs,
+      reserve: spareRounds(slot, damage, mag, (extra?.pellets ?? 1) as number),
+      reloadMs: reloadTime(reloadMs, `${slot}_${String(i + 1).padStart(2, "0")}`, mag, slotMaxMag),
       speedMps: slot === "rocket" ? 22 : slot === "sniper" ? 200 : 70,
       splashM: 0,
       damageEdge: 0,
@@ -239,11 +282,28 @@ function build(slot: Slot, rows: Row[]): WeaponDef[] {
   });
 }
 
+/**
+ * No two weapons in a slot should reload in exactly the same time: the reload
+ * is part of how a weapon feels, and identical numbers make variants blur
+ * together. Collisions are nudged by 10 ms steps, which stays well inside the
+ * balance band the authored value sets.
+ */
+function spreadReloads(list: WeaponDef[]): WeaponDef[] {
+  const taken = new Set<number>();
+  for (const w of list) {
+    let v = w.reloadMs;
+    for (let k = 1; taken.has(v); k++) v = w.reloadMs + (k % 2 ? k * 10 : -k * 10);
+    taken.add(v);
+    w.reloadMs = Math.max(200, v);
+  }
+  return list;
+}
+
 export const WEAPON_CATALOG: Record<Slot, WeaponDef[]> = {
-  pistol: build("pistol", PISTOLS),
-  blaster: build("blaster", RIFLES),
-  sniper: build("sniper", SNIPERS),
-  rocket: build("rocket", HEAVIES),
+  pistol: spreadReloads(build("pistol", PISTOLS)),
+  blaster: spreadReloads(build("blaster", RIFLES)),
+  sniper: spreadReloads(build("sniper", SNIPERS)),
+  rocket: spreadReloads(build("rocket", HEAVIES)),
 };
 
 const BY_ID = new Map<string, WeaponDef>();

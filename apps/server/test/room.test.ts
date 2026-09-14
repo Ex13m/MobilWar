@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { GAME, destination, type ServerMsg } from "@mobilwar/shared";
+import { GAME, destination, weaponById, WEAPON_CATALOG, SLOTS, type ServerMsg } from "@mobilwar/shared";
 import { Room, type Client } from "../src/room.js";
 
 const origin = { lat: 55.75, lon: 37.61 };
@@ -164,6 +164,31 @@ describe("Room", () => {
       advance(G.COOLDOWN_MS + 1);
     }
     expect(pa.grenades.plasma).toBe(0);
+  });
+
+  it("ammo economy: harder-hitting weapons carry fewer rounds", () => {
+    for (const slot of SLOTS) {
+      const list = WEAPON_CATALOG[slot].filter((w) => w.reserve > 0 && w.pellets <= 1);
+      if (list.length < 2) continue;
+      // The rule: the harder a weapon hits, the less of it you carry.
+      const strongest = [...list].sort((a, b) => b.damage - a.damage)[0]!;
+      const weakest = [...list].sort((a, b) => a.damage - b.damage)[0]!;
+      expect(strongest.mag + strongest.reserve).toBeLessThan(weakest.mag + weakest.reserve);
+      // Spares stay between one and six magazines, so nothing is either a
+      // single-magazine trap or an effectively infinite gun.
+      for (const w of list) {
+        expect(w.reserve).toBeGreaterThanOrEqual(w.mag);
+        expect(w.reserve).toBeLessThanOrEqual(w.mag * 6);
+      }
+    }
+  });
+
+  it("every weapon in a slot reloads in its own time", () => {
+    for (const slot of SLOTS) {
+      const times = WEAPON_CATALOG[slot].map((w) => w.reloadMs);
+      expect(new Set(times).size).toBe(times.length);
+      for (const t of times) expect(t).toBeGreaterThanOrEqual(200);
+    }
   });
 
   it("shot misses when aiming away", () => {
@@ -484,7 +509,9 @@ describe("Room", () => {
     advance(GAME.WEAPONS.pistol.RELOAD_MS + 1);
     room.tick();
     expect(pa.mag.pistol).toBe(GAME.WEAPONS.pistol.MAG);
-    expect(pa.reserve.pistol).toBe(-1);
+    // Pistols used to carry infinite spares; every slot now has a real economy.
+    const pistolDef = weaponById(pa.loadout.pistol)!;
+    expect(pa.reserve.pistol).toBe(pistolDef.reserve - pistolDef.mag);
     // rifle: reserve decreases; switching cancels
     room.selectWeapon(pa, "blaster");
     pa.mag.blaster = 3;
