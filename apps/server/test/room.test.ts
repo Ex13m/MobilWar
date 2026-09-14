@@ -55,6 +55,40 @@ describe("Room", () => {
     expect(b.inbox.some((m) => m.type === "kill")).toBe(true);
   });
 
+  it("shot misses when the phone is aimed at the sky or at the ground", () => {
+    const { room, pa, pb, startPlaying } = setup();
+    startPlaying();
+    room.updatePosition(pa, origin.lat, origin.lon, 5, 0);
+    const north = destination(origin, 0, 20);
+    room.updatePosition(pb, north.lat, north.lon, 5, 180);
+    room.shoot(pa, 0, "blaster", { pitch: GAME.VERT_HALF_ANGLE_DEG + 15 });
+    expect(pb.hp).toBe(GAME.MAX_HP);
+    room.shoot(pa, 0, "blaster", { pitch: -(GAME.VERT_HALF_ANGLE_DEG + 15) });
+    expect(pb.hp).toBe(GAME.MAX_HP);
+  });
+
+  it("shot still lands while the phone is held roughly level", () => {
+    const { room, pa, pb, startPlaying } = setup();
+    startPlaying();
+    room.updatePosition(pa, origin.lat, origin.lon, 5, 0);
+    const north = destination(origin, 0, 20);
+    room.updatePosition(pb, north.lat, north.lon, 5, 180);
+    room.shoot(pa, 0, "blaster", { pitch: GAME.VERT_HALF_ANGLE_DEG - 5 });
+    expect(pb.hp).toBeLessThan(GAME.MAX_HP);
+  });
+
+  it("shot event carries the aim pitch so other clients draw the right tracer", () => {
+    const { room, pa, pb, b, startPlaying } = setup();
+    startPlaying();
+    room.updatePosition(pa, origin.lat, origin.lon, 5, 0);
+    const north = destination(origin, 0, 20);
+    room.updatePosition(pb, north.lat, north.lon, 5, 180);
+    b.inbox.length = 0;
+    room.shoot(pa, 0, "blaster", { pitch: 7 });
+    const evt = b.inbox.find((m) => m.type === "shot");
+    expect(evt && evt.type === "shot" && evt.pitch).toBe(7);
+  });
+
   it("shot misses when aiming away", () => {
     const { room, pa, pb, startPlaying } = setup();
     startPlaying();

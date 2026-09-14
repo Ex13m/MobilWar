@@ -288,7 +288,8 @@ export class Game {
     }
     this.lastShotAt[w] = now;
     const heading = this.o.sensors.orient.heading;
-    this.o.audio.shot(w, weaponById(this.o.profile.loadout[w])?.pitch);
+    const pitch = this.o.sensors.orient.pitch;
+    this.o.audio.shot(w, weaponById(this.o.profile.loadout[w])?.pitch, this.o.profile.loadout[w]);
     this.net.send({ type: "shoot", weapon: w, heading, pitch: this.o.sensors.orient.pitch, ct: now, chargeMs: Math.round(chargeMs), zoomed: this.zoomed });
     if (this.scene) {
       if (w !== this.scene.viewmodel.current) void this.scene.viewmodel.setWeapon(w, this.o.profile.loadout[w]);
@@ -302,7 +303,17 @@ export class Game {
         const n = def ? Math.max(1, def.pellets) : 1;
         for (let i = 0; i < n; i++) {
           const jitter = n > 1 ? (Math.random() - 0.5) * (def?.cone ?? 8) : 0;
-          this.scene.bolt(this.world.me.x, this.world.me.z, heading + jitter, def?.rangeM ?? W.RANGE_M, color, hot && n === 1 ? { x: hot.x, z: hot.z } : undefined, from);
+          const vJitter = n > 1 ? (Math.random() - 0.5) * (def?.cone ?? 8) : 0;
+          this.scene.bolt(
+            this.world.me.x,
+            this.world.me.z,
+            heading + jitter,
+            pitch + vJitter,
+            def?.rangeM ?? W.RANGE_M,
+            color,
+            hot && n === 1 ? { x: hot.x, z: hot.z } : undefined,
+            from,
+          );
         }
       }
     }
@@ -311,6 +322,9 @@ export class Game {
   private aimTarget(): { id: string; x: number; z: number } | null {
     const w = this.weapon;
     const me = this.world.myPlayer();
+    // Pointing at the sky or at your feet is a miss, so the local tracer must
+    // not snap onto a target the vertical aim has already ruled out.
+    if (Math.abs(this.o.sensors.orient.pitch) > GAME.VERT_HALF_ANGLE_DEG) return null;
     const hot = resolveShot(
       { x: this.world.me.x, z: this.world.me.z, acc: this.world.me.acc },
       this.o.sensors.orient.heading,
@@ -425,6 +439,11 @@ export class Game {
       } else if (m.blockedBy) {
         const b = this.world.objects.get(m.blockedBy);
         if (b && this.scene) this.scene.fx.hitSpark(new THREE.Vector3(b.x, 0.9, b.z), 0xffc060);
+        if (b) {
+          const rel = this.relTo(b.x, b.z) * (Math.PI / 180);
+          const d = distLocal(this.world.me, b);
+          this.o.audio.barrierHit({ x: Math.sin(rel) * Math.min(d, 30), z: -Math.cos(rel) * Math.min(d, 30) }, d);
+        }
       }
       return;
     }
@@ -445,7 +464,7 @@ export class Game {
     }
     const from = new THREE.Vector3(m.x, m.weapon === "drone" ? 3 : m.weapon === "turret" ? 0.8 : 1.3, m.z);
     const hitMe = m.targetId === this.world.myId;
-    this.scene.bolt(m.x, m.z, m.heading, GAME.RIFLE_RANGE_M, color, target, from, hitMe ? () => this.scene?.fx.hitSpark(new THREE.Vector3(this.world.me.x, 1.2, this.world.me.z), FX.hit) : undefined);
+    this.scene.bolt(m.x, m.z, m.heading, m.pitch ?? 0, GAME.RIFLE_RANGE_M, color, target, from, hitMe ? () => this.scene?.fx.hitSpark(new THREE.Vector3(this.world.me.x, 1.2, this.world.me.z), FX.hit) : undefined);
   }
 
   private onEvent(kind: string, data?: Record<string, unknown>): void {
@@ -529,12 +548,13 @@ export class Game {
         return;
       case "overheat":
         this.hud?.banner("Перегрев! 3 с", "warn", 3000);
-        this.o.audio.warn();
+        this.o.audio.overheat();
         return;
       case "emp": {
         const x = Number(data?.x);
         const z = Number(data?.z);
         if (this.scene) this.scene.fx.shieldRipple(new THREE.Vector3(x, 1, z));
+        this.o.audio.emp(Math.hypot(x - this.world.me.x, z - this.world.me.z));
         return;
       }
       case "respawn":
@@ -555,6 +575,7 @@ export class Game {
     this.hud?.feed(t);
     if (kind === "round_start" || kind === "round_end") {
       this.hud?.banner(t, "", 3000);
+      if (kind === "round_start") this.o.audio.roundStart();
       this.o.audio.say(t);
     }
     if (kind === "infected" && data?.id === this.world.myId) this.o.audio.say("Ты заражён. Теперь ты охотишься");

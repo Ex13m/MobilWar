@@ -508,11 +508,28 @@ export class ArScene {
     return g;
   }
 
-  /** Draw a bolt from a world point along a heading (or to a target). */
-  bolt(x: number, z: number, headingDeg: number, len: number, color: number, target?: { x: number; z: number }, from?: THREE.Vector3, onArrive?: () => void): void {
+  /** Draw a bolt from a world point along a heading + pitch (or to a target). */
+  bolt(
+    x: number,
+    z: number,
+    headingDeg: number,
+    pitchDeg: number,
+    len: number,
+    color: number,
+    target?: { x: number; z: number },
+    from?: THREE.Vector3,
+    onArrive?: () => void,
+  ): void {
     const h = headingDeg * DEG;
+    const p = pitchDeg * DEG;
     const start = from ?? new THREE.Vector3(x, 1.3, z);
-    const end = target ? new THREE.Vector3(target.x, 1.0, target.z) : new THREE.Vector3(x + Math.sin(h) * len, 1.2, z - Math.cos(h) * len);
+    // The bolt leaves the muzzle along the full 3D aim direction: yaw from the
+    // compass, elevation from the phone's tilt. Without the pitch term every
+    // tracer stayed in the crosshair plane no matter how the phone was held.
+    const cp = Math.cos(p);
+    const end = target
+      ? new THREE.Vector3(target.x, 1.0, target.z)
+      : new THREE.Vector3(start.x + Math.sin(h) * cp * len, start.y + Math.sin(p) * len, start.z - Math.cos(h) * cp * len);
     this.fx.bolt(start, end, color, GAME.WEAPONS.blaster.SPEED_MPS, onArrive);
   }
 

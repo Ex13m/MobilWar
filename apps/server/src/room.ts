@@ -351,7 +351,7 @@ export class Room {
     }
   }
 
-  shoot(p: Player, heading: number, weapon: WeaponId = p.weapon, opts: { chargeMs?: number; zoomed?: boolean } = {}): void {
+  shoot(p: Player, heading: number, weapon: WeaponId = p.weapon, opts: { chargeMs?: number; zoomed?: boolean; pitch?: number } = {}): void {
     const t = this.now();
     if (this.phase !== "playing" || !p.alive || p.isReferee) return;
     if (p.outOfBoundsSince) return;
@@ -386,8 +386,9 @@ export class Room {
       }
     }
 
+    const aimPitch = Number.isFinite(opts.pitch) ? (opts.pitch as number) : undefined;
     if (weapon === "rocket" && W.pellets <= 1) {
-      this.launchRocket(p, t, W);
+      this.launchRocket(p, t, W, aimPitch);
       return;
     }
 
@@ -410,7 +411,7 @@ export class Room {
         .filter((o) => o.hp > 0 && o.team !== null && o.team !== p.team && (o.kind === "turret" || o.kind === "drone"))
         .map((o) => ({ id: o.id, x: o.x, z: o.z, acc: 0 })),
     ];
-    const evt: ServerMsg = { type: "shot", weapon, weaponId: W.id, shooterId: p.id, x: p.x, z: p.z, heading: p.heading };
+    const evt: ServerMsg = { type: "shot", weapon, weaponId: W.id, shooterId: p.id, x: p.x, z: p.z, heading: p.heading, pitch: aimPitch };
     const rounds = Math.max(1, W.burst) * Math.max(1, W.pellets);
     // burst consumes extra rounds from the magazine (pellets don't)
     if (W.burst > 1) p.mag[weapon] = Math.max(0, p.mag[weapon] - (W.burst - 1));
@@ -419,7 +420,7 @@ export class Room {
     for (let n = 0; n < rounds; n++) {
       // pellets scatter: jitter the aim inside the cone
       const jitter = W.pellets > 1 ? (this.rng() * 2 - 1) * W.cone * 0.8 : 0;
-      const hit = resolveShot({ x: p.x, z: p.z, acc: p.acc }, p.heading + jitter, targets, W.rangeM, cone);
+      const hit = resolveShot({ x: p.x, z: p.z, acc: p.acc }, p.heading + jitter, targets, W.rangeM, cone, { pitch: aimPitch });
       if (!hit) continue;
       const tgt = this.players.get(hit.id) ?? this.objects.get(hit.id);
       if (!tgt) continue;
@@ -507,13 +508,13 @@ export class Room {
     return firstBarrierOnPath(from, to, this.barriers());
   }
 
-  private launchRocket(p: Player, t: number, W: WeaponDef): void {
+  private launchRocket(p: Player, t: number, W: WeaponDef, aimPitch?: number): void {
     // Aim assist: if an enemy (or ally for heal) is inside the cone, fly exactly to them; otherwise max range.
     const heal = W.trait === "heal";
     const targets = [...this.players.values()]
       .filter((q) => q.id !== p.id && q.alive && !q.isReferee && (heal ? !this.isEnemy(p, q) : this.isEnemy(p, q)) && q.lastSample)
       .map((q) => ({ id: q.id, x: q.x, z: q.z, acc: q.acc }));
-    const aimed = resolveShot({ x: p.x, z: p.z, acc: p.acc }, p.heading, targets, W.rangeM, W.cone);
+    const aimed = resolveShot({ x: p.x, z: p.z, acc: p.acc }, p.heading, targets, W.rangeM, W.cone, { pitch: aimPitch });
     const proj: ServerProjectile = {
       id: uid("rk"),
       kind: "rocket",
@@ -530,7 +531,7 @@ export class Room {
       def: W,
     };
     this.projectiles.set(proj.id, proj);
-    this.broadcast({ type: "shot", weapon: "rocket", weaponId: W.id, shooterId: p.id, x: p.x, z: p.z, heading: p.heading });
+    this.broadcast({ type: "shot", weapon: "rocket", weaponId: W.id, shooterId: p.id, x: p.x, z: p.z, heading: p.heading, pitch: aimPitch });
   }
 
   private tickProjectiles(t: number): void {

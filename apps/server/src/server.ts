@@ -217,7 +217,7 @@ export function createApp(opts: { dbPath?: string } = {}) {
         if (!conn.shootBucket.take()) return;
         const p = room.players.get(conn.id);
         if (!p) return;
-        room.shoot(p, Number(msg.heading), msg.weapon, { chargeMs: Number(msg.chargeMs) || 0, zoomed: !!msg.zoomed });
+        room.shoot(p, Number(msg.heading), msg.weapon, { chargeMs: Number(msg.chargeMs) || 0, zoomed: !!msg.zoomed, pitch: Number(msg.pitch) });
         return;
       }
       case "reload": {

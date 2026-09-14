@@ -47,6 +47,12 @@ export const GAME = {
   CONE_HALF_ANGLE_DEG: 10,
   /** Extra hit radius (m) added to account for combined GPS error. */
   HIT_RADIUS_BASE_M: 3,
+  /**
+   * Vertical half-angle (deg) the aim may deviate from the target's elevation.
+   * Targets stand on the same ground plane, so this is generous — it exists so
+   * that pointing the phone at the sky or at your own feet is a clean miss.
+   */
+  VERT_HALF_ANGLE_DEG: 22,
   /** Minimum time dead before respawn is possible, ms. */
   RESPAWN_MS: 8000,
   /** After this extra time a dead player respawns even without reaching the base, ms. */

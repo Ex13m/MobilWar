@@ -1,4 +1,4 @@
-import { SFX, type SfxId } from "./assets.js";
+import { GEN_SHIPPED, SFX, type SfxId } from "./assets.js";
 
 /**
  * Audio: CC0 samples (Kenney) for shots/hits/UI + synthesised explosions & rockets,
@@ -55,6 +55,7 @@ export class GameAudio {
     if (!this.ctx) return;
     await Promise.all(
       (Object.keys(SFX) as SfxId[]).map(async (id) => {
+        if (id.startsWith("g_") && !GEN_SHIPPED.has(id)) return;
         try {
           const r = await fetch(SFX[id]);
           const buf = await this.ctx!.decodeAudioData(await r.arrayBuffer());
@@ -67,7 +68,7 @@ export class GameAudio {
   }
 
   /** Play a sample. rel = {x right, z forward(-)} in metres for spatial sources. */
-  play(id: SfxId, o: { gain?: number; rate?: number; rel?: { x: number; z: number }; dist?: number; reverb?: number } = {}): void {
+  play(id: SfxId, o: { gain?: number; rate?: number; rel?: { x: number; z: number }; dist?: number; reverb?: number; tilt?: number; body?: number } = {}): void {
     if (!this.ctx || !this.master || !this.enabled) return;
     const buf = this.buffers.get(id);
     if (!buf) return;
@@ -76,7 +77,27 @@ export class GameAudio {
     src.playbackRate.value = (o.rate ?? 1) * (0.97 + Math.random() * 0.06);
     const g = this.ctx.createGain();
     g.gain.value = o.gain ?? 0.8;
-    src.connect(g);
+    let head: AudioNode = src;
+    // Per-weapon spectral character: tilt < 0 darkens (heavy, suppressed),
+    // tilt > 0 brightens (light, high-velocity). body boosts the low mids.
+    if (o.tilt) {
+      const sh = this.ctx.createBiquadFilter();
+      sh.type = o.tilt > 0 ? "highshelf" : "lowpass";
+      sh.frequency.value = o.tilt > 0 ? 2600 : Math.max(900, 9000 + o.tilt * 5200);
+      if (o.tilt > 0) sh.gain.value = Math.min(12, o.tilt * 12);
+      head.connect(sh);
+      head = sh;
+    }
+    if (o.body) {
+      const pk = this.ctx.createBiquadFilter();
+      pk.type = "peaking";
+      pk.frequency.value = 220;
+      pk.Q.value = 0.9;
+      pk.gain.value = Math.max(-9, Math.min(9, o.body * 9));
+      head.connect(pk);
+      head = pk;
+    }
+    head.connect(g);
     let out: AudioNode = g;
     if (o.rel) {
       const pan = this.ctx.createPanner();
@@ -103,6 +124,18 @@ export class GameAudio {
     }
     src.start();
   }
+
+  /** Play the first available sample from a preference list (generated set first, Kenney fallback). */
+  private playFirst(ids: SfxId[], o: Parameters<GameAudio["play"]>[1] = {}): boolean {
+    for (const id of ids) {
+      if (this.buffers.has(id)) {
+        this.play(id, o);
+        return true;
+      }
+    }
+    return false;
+  }
+  private flip = false;
 
   /* ---------- synthesised layers ---------- */
 
@@ -146,8 +179,95 @@ export class GameAudio {
 
   /* ---------- game cues ---------- */
 
-  shot(weapon: "pistol" | "blaster" | "sniper" | "rocket", pitch?: number): void {
+  /** Stable 0..1 hash of a catalog id, so a weapon always sounds like itself. */
+  private static idHash(id: string | undefined): number {
+    if (!id) return 0.5;
+    let h = 2166136261;
+    for (let i = 0; i < id.length; i++) {
+      h ^= id.charCodeAt(i);
+      h = Math.imul(h, 16777619);
+    }
+    return ((h >>> 0) % 10000) / 10000;
+  }
+
+  /**
+   * A short accent layered under the sample that gives each catalog variant its
+   * own signature: 30 weapons per slot share three base recordings, so without
+   * this they all read as the same gun.
+   */
+  private accent(h: number, weapon: "pistol" | "blaster" | "sniper" | "rocket"): void {
+    const k = Math.floor(h * 6);
+    const base = weapon === "rocket" ? 70 : weapon === "sniper" ? 110 : weapon === "pistol" ? 380 : 190;
+    switch (k) {
+      case 0:
+        this.osc(base * 2.4, 0.045, "square", 0.07, base * 0.7);
+        break;
+      case 1:
+        this.noise(0.08, 0.16, 7200, 900);
+        break;
+      case 2:
+        this.osc(base * 0.8, 0.12, "sawtooth", 0.1, base * 0.35);
+        break;
+      case 3:
+        this.osc(base * 3.1, 0.03, "triangle", 0.06);
+        this.noise(0.05, 0.1, 9000, 2000);
+        break;
+      case 4:
+        this.osc(base * 1.5, 0.07, "sine", 0.12, base * 2.2);
+        break;
+      default:
+        this.noise(0.12, 0.1, 3200, 400);
+    }
+  }
+
+  shot(weapon: "pistol" | "blaster" | "sniper" | "rocket", pitch?: number, weaponId?: string): void {
     const r = (base: number) => (pitch ? base * (pitch / (weapon === "rocket" ? 0.55 : weapon === "pistol" ? 1.5 : weapon === "sniper" ? 0.6 : 1.15)) : base);
+    // Generated cinematic set: pitch scales lightly around 1.0 so variants still differ.
+    const h = GameAudio.idHash(weaponId);
+    // Spread the playback rate much wider than the old ±20 %: with three base
+    // recordings per slot this is what separates one variant from the next.
+    const v = Math.max(0.68, Math.min(1.42, (pitch ? 0.8 + 0.25 * pitch : 1) * (0.82 + h * 0.38)));
+    this.flip = !this.flip;
+    // Each slot draws from a small pool; the id picks the pool entry, so the
+    // same weapon always fires the same recording.
+    const pools: Record<string, SfxId[][]> = {
+      pistol: [
+        ["g_pistol_a", "g_pistol_b"],
+        ["g_pistol_b", "g_pistol_a"],
+        ["g_ricochet", "g_pistol_a"],
+      ],
+      blaster: [
+        ["g_rifle_a", "g_rifle_b"],
+        ["g_rifle_b", "g_rifle_a"],
+        ["g_minigun", "g_rifle_a"],
+      ],
+      sniper: [
+        ["g_sniper"],
+        ["g_sniper_charge", "g_sniper"],
+        ["g_rifle_b", "g_sniper"],
+      ],
+      rocket: [
+        ["g_rocket"],
+        ["g_grenade", "g_rocket"],
+        ["g_explosion_mid", "g_rocket"],
+      ],
+    };
+    const pool = pools[weapon]!;
+    const ids = pool[Math.floor(h * pool.length) % pool.length]!;
+    const heavy = weapon === "sniper" || weapon === "rocket";
+    if (
+      this.playFirst(ids, {
+        gain: heavy ? 1 : 0.85,
+        rate: v,
+        reverb: weapon === "sniper" ? 0.8 : 0.35,
+        tilt: (h - 0.5) * 1.6,
+        body: (0.5 - h) * 1.2,
+      })
+    ) {
+      this.accent(h, weapon);
+      this.vibrate(weapon === "rocket" ? 40 : weapon === "sniper" ? 35 : 12);
+      return;
+    }
     switch (weapon) {
       case "rocket":
         this.play("blaster", { gain: 0.9, rate: r(0.55), reverb: 0.7 });
@@ -172,17 +292,35 @@ export class GameAudio {
         this.vibrate(12);
     }
   }
-  /** Sniper charge: rising tone while the trigger is held. */
+  private chargeStarted = false;
+  /** Sniper charge: one generated riser at the start of the hold, else a rising tone. */
   charge(k: number): void {
-    this.osc(300 + 900 * k, 0.09, "triangle", 0.12 + 0.2 * k);
+    if (k <= 0.12 && !this.chargeStarted) {
+      this.chargeStarted = true;
+      if (this.playFirst(["g_sniper_charge"], { gain: 0.7 })) return;
+    }
+    if (k >= 1) this.chargeStarted = false;
+    if (!this.buffers.has("g_sniper_charge")) this.osc(300 + 900 * k, 0.09, "triangle", 0.12 + 0.2 * k);
+  }
+  minigunSpin(): void {
+    this.playFirst(["g_minigun"], { gain: 0.7 });
   }
   reload(weapon: string, ms: number): void {
+    const gen: Record<string, SfxId> = { pistol: "g_pistol_reload", blaster: "g_rifle_reload", sniper: "g_sniper_reload", rocket: "g_rifle_reload" };
+    const id = gen[weapon];
+    if (id && this.buffers.has(id)) {
+      const buf = this.buffers.get(id)!;
+      this.play(id, { gain: 0.8, rate: Math.max(0.6, Math.min(1.6, (buf.duration * 1000) / ms)) });
+      return;
+    }
     this.play("change", { gain: 0.6, rate: weapon === "sniper" ? 0.7 : 1.0 });
     setTimeout(() => this.play("impact", { gain: 0.35, rate: 1.6 }), ms * 0.5);
     setTimeout(() => this.play("confirm", { gain: 0.4, rate: 0.9 }), ms * 0.92);
   }
   remoteShot(weapon: string, rel: { x: number; z: number }, dist: number): void {
     const gain = Math.max(0.05, 1 - dist / 90);
+    const gen: Record<string, SfxId[]> = { pistol: ["g_pistol_b", "g_pistol_a"], blaster: ["g_rifle_b", "g_rifle_a"], sniper: ["g_sniper"], rocket: ["g_rocket"], turret: ["g_turret"], drone: ["g_pistol_b"] };
+    if (gen[weapon] && this.playFirst(gen[weapon]!, { gain, rel, dist, reverb: 0.8 })) return;
     if (weapon === "rocket") this.play("blaster", { gain, rate: 0.55, rel, dist, reverb: 0.8 });
     else if (weapon === "pistol") this.play("laser1", { gain: gain * 0.8, rate: 1.5, rel, dist, reverb: 0.4 });
     else if (weapon === "sniper") this.play("zap", { gain, rate: 0.6, rel, dist, reverb: 1 });
@@ -192,6 +330,10 @@ export class GameAudio {
   }
   explosion(dist: number, rel?: { x: number; z: number }): void {
     const g = Math.max(0.15, 1 - dist / 80);
+    if (this.playFirst(dist > 35 ? ["g_explosion_far", "g_explosion_big"] : dist > 12 ? ["g_explosion_mid", "g_explosion_big"] : ["g_explosion_big", "g_explosion_mid"], { gain: Math.min(1, g * 1.2), rel: dist > 6 ? rel : undefined, dist, reverb: 0.9 })) {
+      this.vibrate(dist < 12 ? [120, 40, 80] : 60);
+      return;
+    }
     this.noise(1.4, 1.2 * g, 6000, 120);
     this.osc(60, 1.1, "sine", 0.9 * g, 28);
     this.osc(220, 0.25, "sawtooth", 0.3 * g, 50);
@@ -199,40 +341,62 @@ export class GameAudio {
     this.vibrate(dist < 12 ? [120, 40, 80] : 60);
   }
   hitConfirm(kill = false): void {
-    this.play("confirm", { gain: kill ? 0.9 : 0.55, rate: kill ? 1.0 : 1.4 });
+    if (!this.playFirst(["g_hit_confirm"], { gain: kill ? 0.9 : 0.6, rate: kill ? 0.9 : 1.15 })) this.play("confirm", { gain: kill ? 0.9 : 0.55, rate: kill ? 1.0 : 1.4 });
     this.vibrate(15);
   }
   gotHit(dmg: number): void {
-    this.play("impact", { gain: 0.9, rate: 0.9 });
-    this.osc(110, 0.3, "sawtooth", 0.45, 45);
+    if (!this.playFirst(["g_hit_body"], { gain: 1, rate: dmg >= 40 ? 0.85 : 1 })) this.play("impact", { gain: 0.9, rate: 0.9 });
+    this.osc(110, 0.3, "sawtooth", 0.35, 45);
     this.vibrate(dmg >= 40 ? [120, 40, 120] : [60, 30, 60]);
   }
   shieldHit(): void {
-    this.play("zap", { gain: 0.6, rate: 1.3 });
+    if (!this.playFirst(["g_hit_shield"], { gain: 0.8 })) this.play("zap", { gain: 0.6, rate: 1.3 });
     this.vibrate(30);
   }
+  barrierHit(rel?: { x: number; z: number }, dist = 5): void {
+    this.playFirst(["g_hit_metal"], { gain: 0.7, rel, dist });
+  }
+  emp(dist: number): void {
+    this.playFirst(["g_emp"], { gain: Math.max(0.3, 1 - dist / 40) });
+  }
+  lowHealthLoopId: number | null = null;
   kill(): void {
-    this.play("confirm", { gain: 0.9, rate: 0.8 });
-    setTimeout(() => this.play("powerup", { gain: 0.5, rate: 1.2 }), 120);
+    if (!this.playFirst(["g_hit_confirm"], { gain: 1, rate: 0.8 })) this.play("confirm", { gain: 0.9, rate: 0.8 });
+    setTimeout(() => this.playFirst(["g_victory", "powerup"], { gain: 0.5, rate: 1.1 }), 120);
     this.vibrate([30, 30, 30, 30, 60]);
   }
   death(): void {
-    this.play("lowDown", { gain: 1, rate: 0.8 });
-    this.noise(0.8, 0.5, 2000, 100);
+    if (!this.playFirst(["g_death"], { gain: 1 })) {
+      this.play("lowDown", { gain: 1, rate: 0.8 });
+      this.noise(0.8, 0.5, 2000, 100);
+    }
     this.vibrate(400);
   }
   respawn(): void {
-    this.play("powerup", { gain: 0.8, rate: 1 });
+    this.playFirst(["g_respawn", "powerup"], { gain: 0.8 });
   }
   pickup(kind: string): void {
-    this.play("powerup", { gain: 0.8, rate: kind === "shield" ? 0.8 : kind === "medkit" ? 1.1 : 1.3 });
+    if (kind === "shield") this.playFirst(["g_shield_up", "g_pickup", "powerup"], { gain: 0.9 });
+    else this.playFirst(["g_pickup", "powerup"], { gain: 0.8, rate: kind === "medkit" ? 1.05 : 1.2 });
     this.vibrate(25);
   }
   empty(): void {
-    this.play("error", { gain: 0.6, rate: 1.2 });
+    this.playFirst(["g_empty", "error"], { gain: 0.7, rate: 1.1 });
   }
   weaponSwitch(): void {
-    this.play("change", { gain: 0.7 });
+    this.playFirst(["g_switch", "change"], { gain: 0.7 });
+  }
+  overheat(): void {
+    this.playFirst(["g_overheat"], { gain: 0.8 });
+  }
+  roundStart(): void {
+    this.playFirst(["g_round_start"], { gain: 0.9 });
+  }
+  siren(): void {
+    this.playFirst(["g_siren"], { gain: 0.8 });
+  }
+  crate(rel?: { x: number; z: number }, dist = 20): void {
+    this.playFirst(["g_crate"], { gain: 0.8, rel, dist });
   }
   placed(): void {
     this.play("confirm", { gain: 0.6, rate: 0.7 });
@@ -243,11 +407,12 @@ export class GameAudio {
     this.vibrate([100, 50, 100]);
   }
   lockOn(): void {
-    this.osc(1500, 0.05, "sine", 0.3);
+    if (!this.playFirst(["g_lockon"], { gain: 0.5 })) this.osc(1500, 0.05, "sine", 0.3);
   }
   heartbeat(on: boolean): void {
     if (on && this.heartbeatTimer === null) {
       const beat = () => {
+        if (this.playFirst(["g_heartbeat"], { gain: 0.7 })) return;
         this.osc(55, 0.12, "sine", 0.5, 40);
         setTimeout(() => this.osc(50, 0.1, "sine", 0.35, 35), 160);
       };

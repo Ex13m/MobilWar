@@ -51,8 +51,66 @@ export const SFX = {
   confirm: "/assets/sfx/confirmation_001.ogg",
   error: "/assets/sfx/error_001.ogg",
   lowDown: "/assets/sfx/lowDown.ogg",
+  // Generated cinematic set (Mirelo text-to-audio via Higgsfield game pipeline), see LICENSES.md
+  g_pistol_a: "/assets/sfx/gen/pistol_a.ogg",
+  g_pistol_b: "/assets/sfx/gen/pistol_b.ogg",
+  g_pistol_reload: "/assets/sfx/gen/pistol_reload.ogg",
+  g_rifle_a: "/assets/sfx/gen/rifle_a.ogg",
+  g_rifle_b: "/assets/sfx/gen/rifle_b.ogg",
+  g_rifle_reload: "/assets/sfx/gen/rifle_reload.ogg",
+  g_minigun: "/assets/sfx/gen/minigun.ogg",
+  g_sniper: "/assets/sfx/gen/sniper.ogg",
+  g_sniper_charge: "/assets/sfx/gen/sniper_charge.ogg",
+  g_sniper_reload: "/assets/sfx/gen/sniper_reload.ogg",
+  g_rocket: "/assets/sfx/gen/rocket.ogg",
+  g_grenade: "/assets/sfx/gen/grenade.ogg",
+  g_explosion_big: "/assets/sfx/gen/explosion_big.ogg",
+  g_explosion_mid: "/assets/sfx/gen/explosion_mid.ogg",
+  g_explosion_far: "/assets/sfx/gen/explosion_far.ogg",
+  g_emp: "/assets/sfx/gen/emp.ogg",
+  g_hit_body: "/assets/sfx/gen/hit_body.ogg",
+  g_hit_shield: "/assets/sfx/gen/hit_shield.ogg",
+  g_hit_metal: "/assets/sfx/gen/hit_metal.ogg",
+  g_ricochet: "/assets/sfx/gen/ricochet.ogg",
+  g_hit_confirm: "/assets/sfx/gen/hit_confirm.ogg",
+  g_death: "/assets/sfx/gen/death.ogg",
+  g_respawn: "/assets/sfx/gen/respawn.ogg",
+  g_pickup: "/assets/sfx/gen/pickup.ogg",
+  g_shield_up: "/assets/sfx/gen/shield_up.ogg",
+  g_heartbeat: "/assets/sfx/gen/heartbeat.ogg",
+  g_overheat: "/assets/sfx/gen/overheat.ogg",
+  g_empty: "/assets/sfx/gen/empty.ogg",
+  g_switch: "/assets/sfx/gen/switch.ogg",
+  g_turret: "/assets/sfx/gen/turret.ogg",
+  g_drone: "/assets/sfx/gen/drone.ogg",
+  g_crate: "/assets/sfx/gen/crate.ogg",
+  g_siren: "/assets/sfx/gen/siren.ogg",
+  g_victory: "/assets/sfx/gen/victory.ogg",
+  g_round_start: "/assets/sfx/gen/round_start.ogg",
+  g_lockon: "/assets/sfx/gen/lockon.ogg",
 } as const;
 export type SfxId = keyof typeof SFX;
+
+/**
+ * Generated clips actually shipped in public/assets/sfx/gen. The `g_*` fallback
+ * chains name the whole planned set, so the loader consults this list instead of
+ * firing a request for every id and collecting 404s on each launch.
+ */
+export const GEN_SHIPPED: ReadonlySet<string> = new Set([
+  "g_explosion_mid",
+  "g_grenade",
+  "g_minigun",
+  "g_pistol_a",
+  "g_pistol_b",
+  "g_pistol_reload",
+  "g_ricochet",
+  "g_rifle_a",
+  "g_rifle_b",
+  "g_rifle_reload",
+  "g_rocket",
+  "g_sniper",
+  "g_sniper_charge"
+]);
 
 /** Per-weapon presentation: model, how it sits in the hand, recoil, sounds. */
 export interface WeaponPreset {
