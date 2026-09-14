@@ -340,7 +340,20 @@ export class ArScene {
       g.position.set(o.x, o.y ?? 0, o.z);
       if (o.kind === "turret") {
         const head = g.getObjectByName("head");
-        if (head && typeof o.heading === "number") head.rotation.y = -o.heading * DEG;
+        if (head && typeof o.heading === "number") {
+          // The server sends a heading ten times a second; snapping to it looks
+          // like a slide show. Traverse toward it at a fixed rate so the turret
+          // visibly swings onto a target and overshoots nothing.
+          const want = -o.heading * DEG;
+          const cur = head.rotation.y;
+          let d = ((want - cur + Math.PI) % (Math.PI * 2)) - Math.PI;
+          if (d < -Math.PI) d += Math.PI * 2;
+          const maxStep = 2.6 * this.lastDt; // rad/s
+          head.rotation.y = cur + Math.max(-maxStep, Math.min(maxStep, d));
+        }
+        // Barrel recoil: kicked on the shot event, eased back here.
+        const barrel = g.getObjectByName("barrel");
+        if (barrel) barrel.position.z += (0 - barrel.position.z) * Math.min(1, this.lastDt * 9);
       } else if (o.kind === "drone") {
         g.rotation.y = -(o.heading ?? 0) * DEG;
         g.position.y = (o.y ?? 3) + Math.sin(t * 3 + o.x) * 0.15;
@@ -508,6 +521,13 @@ export class ArScene {
     return g;
   }
 
+  /** Slide a turret's barrel back; the update loop eases it home again. */
+  turretRecoil(objectId: string): void {
+    const g = this.objects.get(objectId);
+    const barrel = g?.getObjectByName("barrel");
+    if (barrel) barrel.position.z = 0.16;
+  }
+
   /** Draw a bolt from a world point along a heading + pitch (or to a target). */
   bolt(
     x: number,
@@ -519,6 +539,7 @@ export class ArScene {
     target?: { x: number; z: number },
     from?: THREE.Vector3,
     onArrive?: () => void,
+    speedMps?: number,
   ): void {
     const h = headingDeg * DEG;
     const p = pitchDeg * DEG;
@@ -530,7 +551,9 @@ export class ArScene {
     const end = target
       ? new THREE.Vector3(target.x, 1.0, target.z)
       : new THREE.Vector3(start.x + Math.sin(h) * cp * len, start.y + Math.sin(p) * len, start.z - Math.cos(h) * cp * len);
-    this.fx.bolt(start, end, color, GAME.WEAPONS.blaster.SPEED_MPS, onArrive);
+    // Each weapon's round flies at its own speed, so a plasma lob and a rail
+    // slug read completely differently even along the same line.
+    this.fx.bolt(start, end, color, speedMps ?? GAME.WEAPONS.blaster.SPEED_MPS, onArrive);
   }
 
   playerPos(id: string): THREE.Vector3 | null {

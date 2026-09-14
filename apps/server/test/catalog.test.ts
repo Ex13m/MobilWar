@@ -130,6 +130,10 @@ describe("weapon catalog: every weapon works in the simulation", () => {
     t4.room.updatePosition(pd, near.lat, near.lon, 1, 180);
     t4.room.selectWeapon(t4.pa, "blaster");
     t4.room.shoot(t4.pa, 0);
+    // A plasma bolt is slow, so the chain only reaches the neighbour once the
+    // round has actually flown the 20 m.
+    t4.advance(600);
+    t4.tick();
     expect(pd.hp).toBeLessThan(GAME.MAX_HP);
 
     const emp = WEAPON_CATALOG.rocket.find((w) => w.trait === "emp")!;

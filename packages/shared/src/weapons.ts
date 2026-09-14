@@ -28,6 +28,34 @@ export type Trait =
   | "charge" // sniper: hold for charged damage
   | "heal"; // pistol: heals allies it "hits"
 
+/**
+ * Ammunition classes.
+ *
+ * Everything except `rail` takes time to reach the target, which is what makes
+ * leading a moving player matter. Speeds are picked for readability on a 60 m
+ * field: a ballistic round is a streak, an energy bolt is a visible pulse, a
+ * rocket clearly arcs, and a rail shot lands the instant it is fired.
+ */
+export type AmmoKind = "ballistic" | "energy" | "plasma" | "rocket" | "rail";
+
+/** Muzzle velocity in m/s by class. `rail` is effectively instant. */
+export const AMMO_SPEED: Record<AmmoKind, number> = {
+  ballistic: 400,
+  energy: 140,
+  plasma: 90,
+  rocket: 24,
+  rail: 100000,
+};
+
+/** What each class punches through. */
+export const AMMO_PIERCE: Record<AmmoKind, { shield: boolean; cover: boolean }> = {
+  ballistic: { shield: false, cover: false },
+  energy: { shield: false, cover: false },
+  plasma: { shield: true, cover: false },
+  rocket: { shield: false, cover: false },
+  rail: { shield: true, cover: true },
+};
+
 export interface WeaponDef {
   id: string;
   slot: Slot;
@@ -60,6 +88,15 @@ export interface WeaponDef {
   stunMs: number;
   chargeMs: number;
   chargedDamage: number;
+  /**
+   * What the weapon throws downrange. Drives flight speed, what the round can
+   * punch through, and how the tracer is drawn.
+   */
+  ammo: AmmoKind;
+  /** Shield points are ignored by this round. */
+  piercesShield: boolean;
+  /** Cover (barriers) does not stop this round. */
+  piercesCover: boolean;
   /** Presentation. */
   model: string;
   color: number;
@@ -209,6 +246,24 @@ const HEAVIES: Row[] = [
  */
 const AMMO_BUDGET: Record<Slot, number> = { pistol: 600, blaster: 1400, sniper: 900, rocket: 0 };
 
+/**
+ * Pick the ammunition class for a catalog entry.
+ *
+ * Traits that already imply a delivery method win: a charged shot is a rail
+ * slug, anything that burns or jams is plasma, the heavy slot fires rockets.
+ * The rest are split between ballistic and energy off the id hash so every slot
+ * carries a mix rather than thirty of the same thing.
+ */
+function ammoFor(slot: Slot, trait: Trait, damage: number, id: string): AmmoKind {
+  if (slot === "rocket") return "rocket";
+  if (trait === "charge") return "rail";
+  if (trait === "burn" || trait === "emp" || trait === "chain") return "plasma";
+  if (trait === "pierce") return "rail";
+  // A very hard-hitting sniper round reads as a slug, not a pulse.
+  if (slot === "sniper" && damage >= 55) return "rail";
+  return idHash(id) < 0.5 ? "ballistic" : "energy";
+}
+
 /** Stable 0..1 hash of a weapon id, used to break ties in derived numbers. */
 function idHash(id: string): number {
   let h = 2166136261;
@@ -247,8 +302,10 @@ function build(slot: Slot, rows: Row[]): WeaponDef[] {
   const slotMaxMag = rows.reduce((m, r) => Math.max(m, r[7]), 1);
   return rows.map((r, i) => {
     const [name, blurb, trait, damage, cooldownMs, rangeM, cone, mag, reloadMs, model, color, pitch, extra] = r;
+    const id = `${slot}_${String(i + 1).padStart(2, "0")}`;
+    const ammo = (extra?.ammo as AmmoKind | undefined) ?? ammoFor(slot, trait, damage, id);
     const base: WeaponDef = {
-      id: `${slot}_${String(i + 1).padStart(2, "0")}`,
+      id,
       slot,
       name,
       blurb,
@@ -262,8 +319,13 @@ function build(slot: Slot, rows: Row[]): WeaponDef[] {
       bloomDecay: slot === "blaster" ? 10 : 0,
       mag,
       reserve: spareRounds(slot, damage, mag, (extra?.pellets ?? 1) as number),
-      reloadMs: reloadTime(reloadMs, `${slot}_${String(i + 1).padStart(2, "0")}`, mag, slotMaxMag),
-      speedMps: slot === "rocket" ? 22 : slot === "sniper" ? 200 : 70,
+      reloadMs: reloadTime(reloadMs, id, mag, slotMaxMag),
+      ammo,
+      piercesShield: AMMO_PIERCE[ammo].shield || trait === "pierce",
+      piercesCover: AMMO_PIERCE[ammo].cover,
+      // Same class, but no two weapons fly at exactly the same speed: the id
+      // spreads them +/-15 % so each one has its own lead time.
+      speedMps: Math.round(AMMO_SPEED[ammo] * (0.85 + idHash(`${id}v`) * 0.3)),
       splashM: 0,
       damageEdge: 0,
       fuseM: 0,

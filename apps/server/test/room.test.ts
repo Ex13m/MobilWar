@@ -46,7 +46,9 @@ describe("Room", () => {
     room.updatePosition(pb, north.lat, north.lon, 5, 180);
     for (let i = 0; i < 12; i++) {
       room.shoot(pa, 0);
+      // Rounds have a flight time now, so the tick is what lands them.
       advance(GAME.RIFLE_COOLDOWN_MS + 1);
+      room.tick();
     }
     expect(pb.alive).toBe(false);
     expect(pa.kills).toBe(1);
@@ -68,12 +70,14 @@ describe("Room", () => {
   });
 
   it("shot still lands while the phone is held roughly level", () => {
-    const { room, pa, pb, startPlaying } = setup();
+    const { room, pa, pb, advance, startPlaying } = setup();
     startPlaying();
     room.updatePosition(pa, origin.lat, origin.lon, 5, 0);
     const north = destination(origin, 0, 20);
     room.updatePosition(pb, north.lat, north.lon, 5, 180);
     room.shoot(pa, 0, "blaster", { pitch: GAME.VERT_HALF_ANGLE_DEG - 5 });
+    advance(300);
+    room.tick();
     expect(pb.hp).toBeLessThan(GAME.MAX_HP);
   });
 
@@ -188,6 +192,57 @@ describe("Room", () => {
       const times = WEAPON_CATALOG[slot].map((w) => w.reloadMs);
       expect(new Set(times).size).toBe(times.length);
       for (const t of times) expect(t).toBeGreaterThanOrEqual(200);
+    }
+  });
+
+  it("a round takes time to arrive: damage lands only after the flight", () => {
+    const { room, pa, pb, advance, startPlaying } = setup();
+    startPlaying();
+    room.updatePosition(pa, origin.lat, origin.lon, 5, 0);
+    // 50 m out, so even a fast round needs a measurable moment to get there.
+    const far = destination(origin, 0, 50);
+    room.updatePosition(pb, far.lat, far.lon, 5, 180);
+    // Pick a weapon that is slow enough for the delay to be unambiguous.
+    const slow = WEAPON_CATALOG.blaster.filter((w) => w.speedMps < 200).sort((a, b) => a.speedMps - b.speedMps)[0]!;
+    expect(room.equip(pa, "blaster", slow.id)).toBe(true);
+    room.selectWeapon(pa, "blaster");
+    room.shoot(pa, 0, "blaster");
+    room.tick();
+    expect(pb.hp, "the round is still in the air").toBe(GAME.MAX_HP);
+    advance((50 / slow.speedMps) * 1000 + 50);
+    room.tick();
+    expect(pb.hp, "the round has arrived").toBeLessThan(GAME.MAX_HP);
+  });
+
+  it("a rail slug is instant and goes through shield and cover", () => {
+    const { room, pa, pb, startPlaying } = setup();
+    startPlaying();
+    room.updatePosition(pa, origin.lat, origin.lon, 5, 0);
+    const far = destination(origin, 0, 30);
+    room.updatePosition(pb, far.lat, far.lon, 5, 180);
+    const rail = WEAPON_CATALOG.sniper.find((w) => w.ammo === "rail")!;
+    expect(rail.piercesShield).toBe(true);
+    expect(rail.piercesCover).toBe(true);
+    expect(room.equip(pa, "sniper", rail.id)).toBe(true);
+    room.selectWeapon(pa, "sniper");
+    pb.shield = GAME.SHIELD_MAX;
+    room.shoot(pa, 0, "sniper", { zoomed: true });
+    // No tick, no advance: a rail shot arrives the moment it is fired.
+    expect(pb.shield).toBe(GAME.SHIELD_MAX);
+    expect(pb.hp).toBeLessThan(GAME.MAX_HP);
+  });
+
+  it("every weapon carries an ammunition class with a sane speed", () => {
+    for (const slot of SLOTS) {
+      for (const w of WEAPON_CATALOG[slot]) {
+        expect(w.speedMps).toBeGreaterThan(0);
+        if (w.ammo === "rail") expect(w.speedMps).toBeGreaterThan(10000);
+        else expect(w.speedMps).toBeLessThan(600);
+        expect(w.piercesCover ? w.piercesShield : true, `${w.id}: cover-piercing implies shield-piercing`).toBe(true);
+      }
+      // A slot should not be a single ammunition class: variety is the point.
+      const kinds = new Set(WEAPON_CATALOG[slot].map((w) => w.ammo));
+      if (slot !== "rocket") expect(kinds.size).toBeGreaterThan(1);
     }
   });
 
@@ -412,6 +467,7 @@ describe("Room", () => {
     for (let i = 0; i < 60 && room.objects.has(obj.id); i++) {
       room.shoot(pb, 0);
       advance(GAME.RIFLE_COOLDOWN_MS + 1);
+      room.tick();
     }
     expect(room.objects.has(obj.id)).toBe(false);
   });
@@ -551,6 +607,8 @@ describe("Room", () => {
     room.updatePosition(pb, far.lat, far.lon, 1, 180);
     room.selectWeapon(pa, "pistol");
     room.shoot(pa, 0);
+    advance(400);
+    room.tick();
     expect(pb.hp).toBeLessThan(GAME.MAX_HP);
     // sniper zoomed cone 3°: same target is off-axis → miss; then aim exactly and charge → 100
     pb.hp = GAME.MAX_HP;
@@ -558,12 +616,16 @@ describe("Room", () => {
     room.setZoom(pa, true);
     advance(GAME.WEAPONS.sniper.COOLDOWN_MS + 1);
     room.shoot(pa, 0, "sniper", { zoomed: true });
+    advance(400);
+    room.tick();
     expect(pb.hp).toBe(GAME.MAX_HP);
     const straight = destination(origin, 0, 30);
     advance(1000);
     room.updatePosition(pb, straight.lat, straight.lon, 1, 180);
     advance(GAME.WEAPONS.sniper.COOLDOWN_MS + 1);
     room.shoot(pa, 0, "sniper", { zoomed: true, chargeMs: 1000 });
+    advance(400);
+    room.tick();
     expect(pb.alive).toBe(false);
   });
 });

@@ -77,11 +77,28 @@ export function buildTurret(team: Team | null): THREE.Group {
   body.position.y = 0.5;
   body.name = "head";
   g.add(body);
+  // The barrel sits in its own sleeve so it can slide back on each shot
+  // without moving the housing it is mounted in.
+  const sleeve = new THREE.Group();
+  sleeve.name = "barrel";
   const barrel = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.05, 0.8, 8), new THREE.MeshStandardMaterial({ color: 0x111827 }));
   barrel.rotation.x = Math.PI / 2;
-  barrel.position.set(0, 0.5, -0.5);
-  body.add(barrel);
   barrel.position.set(0, 0, -0.5);
+  sleeve.add(barrel);
+  // Muzzle shroud, so the recoil travel is visible against a fixed reference.
+  const shroud = new THREE.Mesh(new THREE.CylinderGeometry(0.09, 0.09, 0.12, 8), new THREE.MeshStandardMaterial({ color: 0x1f2937 }));
+  shroud.rotation.x = Math.PI / 2;
+  shroud.position.set(0, 0, -0.86);
+  sleeve.add(shroud);
+  body.add(sleeve);
+  // Elevation trunnions: two discs either side of the housing, purely to read
+  // as a mechanism when the head swings.
+  for (const sx of [-1, 1]) {
+    const pin = new THREE.Mesh(new THREE.CylinderGeometry(0.08, 0.08, 0.06, 10), new THREE.MeshStandardMaterial({ color: 0x111827 }));
+    pin.rotation.z = Math.PI / 2;
+    pin.position.set(sx * 0.27, 0, -0.1);
+    body.add(pin);
+  }
   return g;
 }
 

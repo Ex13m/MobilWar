@@ -156,6 +156,20 @@ export class Room {
   hill: { x: number; z: number; r: number } | null = null;
   private kothLastTick = 0;
   projectiles = new Map<string, ServerProjectile>();
+  /**
+   * Rounds that have left the muzzle but not yet arrived. Hitscan resolution
+   * still happens at the trigger pull (that is what keeps aiming fair under GPS
+   * noise), but the damage lands after the round's flight time, so a fast mover
+   * can be killed where they were and a slow round can be outrun by a respawn.
+   */
+  private pendingHits: Array<{
+    at: number;
+    shooterId: string;
+    targetId: string;
+    damage: number;
+    weapon: WeaponId;
+    defId: string;
+  }> = [];
   private lastPickupSpawn = 0;
   private lastTickAt = 0;
   private rng = mulberry32(Date.now() & 0xffffffff);
@@ -464,7 +478,8 @@ export class Room {
       if (!hit) continue;
       const tgt = this.players.get(hit.id) ?? this.objects.get(hit.id);
       if (!tgt) continue;
-      const barrier = this.barrierBetween(p, tgt);
+      // A rail slug goes through cover; everything else is stopped by it.
+      const barrier = W.piercesCover ? null : this.barrierBetween(p, tgt);
       if (barrier) {
         if (!firstDone) evt.blockedBy = barrier.id;
         this.damageObject(barrier, Math.round(W.damage / 2));
@@ -491,8 +506,13 @@ export class Room {
         evt.damage = dmg;
         firstDone = true;
       } else extra.push({ targetId: hit.id, damage: dmg });
-      if (victim) this.applyHit(p, victim, dmg, weapon, W, t);
-      else {
+      // Flight time. Anything slower than a rail slug arrives late.
+      const flightMs = (hit.dist / Math.max(1, W.speedMps)) * 1000;
+      if (flightMs >= 30) {
+        this.pendingHits.push({ at: t + flightMs, shooterId: p.id, targetId: hit.id, damage: dmg, weapon, defId: W.id });
+      } else if (victim) {
+        this.applyHit(p, victim, dmg, weapon, W, t);
+      } else {
         const obj = this.objects.get(hit.id);
         if (obj) this.damageObject(obj, dmg);
       }
@@ -510,7 +530,7 @@ export class Room {
 
   /** Apply a hit with the weapon's trait side effects. */
   private applyHit(p: Player, victim: Player, dmg: number, weapon: KillWeapon, W: WeaponDef, t: number): void {
-    const pierce = W.trait === "pierce";
+    const pierce = W.piercesShield;
     this.damagePlayer(victim, dmg, p, weapon, pierce);
     if (W.burnS > 0) {
       victim.burnUntil = Math.max(victim.burnUntil, t + W.burnS * 1000);
@@ -621,6 +641,33 @@ export class Room {
     };
     this.projectiles.set(proj.id, proj);
     this.broadcast({ type: "event", kind: "grenade", data: { id: proj.id, kind, by: p.id, x: p.x, z: p.z, heading: p.heading, range, fuseMs: G.FUSE_MS } });
+  }
+
+  /** Land the rounds whose flight time has elapsed. */
+  private tickPendingHits(t: number): void {
+    if (!this.pendingHits.length) return;
+    const still: typeof this.pendingHits = [];
+    for (const h of this.pendingHits) {
+      if (h.at > t) {
+        still.push(h);
+        continue;
+      }
+      const shooter = this.players.get(h.shooterId);
+      const W = weaponById(h.defId);
+      if (!W) continue;
+      const victim = this.players.get(h.targetId);
+      if (victim) {
+        // The round arrives regardless of who is watching, but a target that
+        // already died (or respawned under protection) is not hit twice.
+        if (!victim.alive || victim.protectedUntil > t) continue;
+        if (shooter) this.applyHit(shooter, victim, h.damage, h.weapon, W, t);
+        else this.damagePlayer(victim, h.damage, null, h.weapon, W.piercesShield);
+        continue;
+      }
+      const obj = this.objects.get(h.targetId);
+      if (obj && obj.hp > 0) this.damageObject(obj, h.damage);
+    }
+    this.pendingHits = still;
   }
 
   private tickProjectiles(t: number): void {
@@ -937,6 +984,7 @@ export class Room {
     for (const p of this.players.values()) this.settleReload(p, t);
     this.tickBurn(t);
     this.tickRespawns(t);
+    this.tickPendingHits(t);
     this.tickProjectiles(t);
     this.tickTurrets(t);
     this.tickDrones(t);

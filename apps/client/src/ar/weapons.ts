@@ -1,7 +1,7 @@
 import * as THREE from "three";
 import type { WeaponId } from "@mobilwar/shared";
 import { WEAPON_PRESETS, MODEL_SCALE, loadModel, sprite, type ModelId } from "../assets.js";
-import { weaponById, type WeaponDef } from "@mobilwar/shared";
+import { WEAPON_CATALOG, weaponById, type WeaponDef } from "@mobilwar/shared";
 
 /** Emissive tint so every catalog variant of the same model reads differently. */
 function tint(root: THREE.Object3D, color: number): void {
@@ -136,6 +136,35 @@ function buildKit(def: WeaponDef, box: THREE.Box3): { group: THREE.Group; muzzle
     g.add(l);
   }
 
+  // --- moving parts ---------------------------------------------------------
+  // A reciprocating slide on top of the receiver. Every shot drives it back and
+  // it rides home again, which is what makes the weapon read as a mechanism
+  // rather than a prop that flashes.
+  const slide = new THREE.Group();
+  slide.name = "slide";
+  const block = new THREE.Mesh(new THREE.BoxGeometry(gauge * 2.4, gauge * 1.2, size.z * 0.3), KIT_DARK);
+  block.position.set(0, topY - gauge * 0.2, box.min.z + size.z * 0.68);
+  slide.add(block);
+  const handle = new THREE.Mesh(new THREE.BoxGeometry(gauge * 0.8, gauge * 0.8, gauge * 1.6), glow);
+  handle.position.set(gauge * 1.6, topY - gauge * 0.2, box.min.z + size.z * 0.68);
+  slide.add(handle);
+  g.add(slide);
+
+  // Rotary barrel cluster for anything that fires fast enough to need one.
+  if (def.cooldownMs <= 110 || def.trait === "overheat") {
+    const spin = new THREE.Group();
+    spin.name = "spin";
+    for (let i = 0; i < 6; i++) {
+      const a = (i / 6) * Math.PI * 2;
+      const tube = new THREE.Mesh(new THREE.CylinderGeometry(gauge * 0.45, gauge * 0.45, size.z * 0.3, 6), KIT_DARK);
+      tube.rotation.x = Math.PI / 2;
+      tube.position.set(Math.cos(a) * gauge * 1.5, Math.sin(a) * gauge * 1.5, 0);
+      spin.add(tube);
+    }
+    spin.position.set(0, midY, frontZ - size.z * 0.14);
+    g.add(spin);
+  }
+
   // --- heat fins: the loud, hot traits wear their cooling on the outside -----
   if (def.trait === "burn" || def.trait === "overheat" || def.trait === "emp") {
     for (let i = 0; i < 4; i++) {
@@ -188,6 +217,10 @@ export class Viewmodel {
   private casings: THREE.InstancedMesh;
   private casingState: Array<{ active: boolean; pos: THREE.Vector3; vel: THREE.Vector3; rot: number; life: number }> = [];
   private casingIdx = 0;
+  /** 1 right after a shot, decaying to 0 as the slide rides home. */
+  private slideT = 0;
+  /** Rotary barrel speed, rad/s; spins up on fire and coasts down. */
+  private spinV = 0;
   private scene: THREE.Object3D;
   private tmpM = new THREE.Matrix4();
   private tmpQ = new THREE.Quaternion();
@@ -237,7 +270,9 @@ export class Viewmodel {
     this.weapon = w;
     const seq = ++this.loading;
     const p = WEAPON_PRESETS[w];
-    const def = weaponId ? weaponById(weaponId) ?? null : this.def;
+    // Without a catalog entry there is no colour, no kit and no moving parts,
+    // so fall back to the slot's first variant rather than leaving it null.
+    const def = (weaponId ? weaponById(weaponId) : null) ?? this.def ?? WEAPON_CATALOG[w][0] ?? null;
     this.def = def;
     this.switchT = 0;
     const modelId = (def && def.model in MODEL_SCALE ? (def.model as ModelId) : p.model);
@@ -296,6 +331,8 @@ export class Viewmodel {
     this.flash.scale.setScalar(0.3 + Math.random() * 0.15);
     this.flash2.scale.setScalar(0.6 + Math.random() * 0.2);
     this.flashLight.intensity = 60;
+    this.slideT = 1;
+    this.spinV = Math.max(this.spinV, 34);
     if (this.weapon !== "rocket") this.ejectCasing();
   }
 
@@ -353,6 +390,16 @@ export class Viewmodel {
 
   update(dt: number, speedMps: number): void {
     this.t += dt;
+    // Moving parts. The slide snaps back and eases home; the rotary cluster
+    // coasts down so a burst leaves it still turning for a moment.
+    this.slideT = Math.max(0, this.slideT - dt * 7);
+    this.spinV = Math.max(0, this.spinV - dt * 22);
+    if (this.kit) {
+      const slide = this.kit.getObjectByName("slide");
+      if (slide) slide.position.z = this.slideT * 0.05;
+      const spin = this.kit.getObjectByName("spin");
+      if (spin) spin.rotation.z += this.spinV * dt;
+    }
     const b = this.back.step(dt);
     const pk = this.pitch.step(dt);
     this.camPitch.step(dt);

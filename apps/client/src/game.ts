@@ -313,6 +313,8 @@ export class Game {
             color,
             hot && n === 1 ? { x: hot.x, z: hot.z } : undefined,
             from,
+            undefined,
+            def?.speedMps,
           );
         }
       }
@@ -462,9 +464,10 @@ export class Game {
       if (tp) target = { x: tp.rx, z: tp.rz };
       else if (to) target = { x: to.x, z: to.z };
     }
+    if (m.weapon === "turret") this.scene.turretRecoil(m.shooterId);
     const from = new THREE.Vector3(m.x, m.weapon === "drone" ? 3 : m.weapon === "turret" ? 0.8 : 1.3, m.z);
     const hitMe = m.targetId === this.world.myId;
-    this.scene.bolt(m.x, m.z, m.heading, m.pitch ?? 0, GAME.RIFLE_RANGE_M, color, target, from, hitMe ? () => this.scene?.fx.hitSpark(new THREE.Vector3(this.world.me.x, 1.2, this.world.me.z), FX.hit) : undefined);
+    this.scene.bolt(m.x, m.z, m.heading, m.pitch ?? 0, GAME.RIFLE_RANGE_M, color, target, from, hitMe ? () => this.scene?.fx.hitSpark(new THREE.Vector3(this.world.me.x, 1.2, this.world.me.z), FX.hit) : undefined, def?.speedMps);
   }
 
   private onEvent(kind: string, data?: Record<string, unknown>): void {
