@@ -89,6 +89,83 @@ describe("Room", () => {
     expect(evt && evt.type === "shot" && evt.pitch).toBe(7);
   });
 
+  it("grenade flies farther the more the phone is tilted up", () => {
+    const { room, pa, startPlaying } = setup();
+    startPlaying();
+    room.updatePosition(pa, origin.lat, origin.lon, 5, 0);
+    const G = GAME.GRENADE;
+    room.throwGrenade(pa, "plasma", 0, G.MIN_PITCH_DEG);
+    const short = [...room.projectiles.values()][0]!;
+    expect(short.maxDist).toBeCloseTo(G.MIN_RANGE_M + G.ROLL_M, 5);
+    room.projectiles.clear();
+    pa.lastGrenadeAt = 0;
+    room.throwGrenade(pa, "plasma", 0, G.MAX_PITCH_DEG);
+    const long = [...room.projectiles.values()][0]!;
+    expect(long.maxDist).toBeCloseTo(G.MAX_RANGE_M + G.ROLL_M, 5);
+  });
+
+  it("plasma grenade blows up on its fuse and damages by distance", () => {
+    const { room, pa, pb, advance, startPlaying } = setup();
+    startPlaying();
+    room.updatePosition(pa, origin.lat, origin.lon, 5, 0);
+    // Stand the victim where a fully tilted throw lands.
+    const G = GAME.GRENADE;
+    const target = destination(origin, 0, G.MAX_RANGE_M + G.ROLL_M);
+    room.updatePosition(pb, target.lat, target.lon, 5, 180);
+    room.throwGrenade(pa, "plasma", 0, G.MAX_PITCH_DEG);
+    expect(pa.grenades.plasma).toBe(G.TYPES.plasma.perLife - 1);
+    // Still ticking, not yet detonated.
+    advance(G.FUSE_MS - 300);
+    room.tick();
+    expect(pb.hp).toBe(GAME.MAX_HP);
+    advance(400);
+    room.tick();
+    expect(pb.hp).toBeLessThan(GAME.MAX_HP);
+    expect(room.projectiles.size).toBe(0);
+  });
+
+  it("fragments reach past the blast core for lighter damage", () => {
+    const { room, pa, pb, advance, startPlaying } = setup();
+    startPlaying();
+    room.updatePosition(pa, origin.lat, origin.lon, 5, 0);
+    const G = GAME.GRENADE;
+    const land = G.MIN_RANGE_M + G.ROLL_M;
+    // Just outside the 5 m core but inside the fragment ring.
+    const out = destination(origin, 0, land + G.TYPES.plasma.splashM + 1.5);
+    room.updatePosition(pb, out.lat, out.lon, 5, 180);
+    room.throwGrenade(pa, "plasma", 0, G.MIN_PITCH_DEG);
+    advance(G.FUSE_MS + 100);
+    room.tick();
+    expect(GAME.MAX_HP - pb.hp).toBe(G.TYPES.plasma.fragDamage);
+  });
+
+  it("EMP grenade strips shields without dealing damage", () => {
+    const { room, pa, pb, advance, startPlaying } = setup();
+    startPlaying();
+    room.updatePosition(pa, origin.lat, origin.lon, 5, 0);
+    const G = GAME.GRENADE;
+    const target = destination(origin, 0, G.MIN_RANGE_M + G.ROLL_M);
+    room.updatePosition(pb, target.lat, target.lon, 5, 180);
+    pb.shield = GAME.SHIELD_MAX;
+    room.throwGrenade(pa, "emp", 0, G.MIN_PITCH_DEG);
+    advance(G.FUSE_MS + 100);
+    room.tick();
+    expect(pb.shield).toBe(0);
+    expect(pb.hp).toBe(GAME.MAX_HP);
+  });
+
+  it("throwables are limited per life and come back on respawn", () => {
+    const { room, pa, advance, startPlaying } = setup();
+    startPlaying();
+    room.updatePosition(pa, origin.lat, origin.lon, 5, 0);
+    const G = GAME.GRENADE;
+    for (let i = 0; i < G.TYPES.plasma.perLife + 2; i++) {
+      room.throwGrenade(pa, "plasma", 0, G.MIN_PITCH_DEG);
+      advance(G.COOLDOWN_MS + 1);
+    }
+    expect(pa.grenades.plasma).toBe(0);
+  });
+
   it("shot misses when aiming away", () => {
     const { room, pa, pb, startPlaying } = setup();
     startPlaying();

@@ -218,6 +218,15 @@ export function createApp(opts: { dbPath?: string } = {}) {
         const p = room.players.get(conn.id);
         if (!p) return;
         room.shoot(p, Number(msg.heading), msg.weapon, { chargeMs: Number(msg.chargeMs) || 0, zoomed: !!msg.zoomed, pitch: Number(msg.pitch) });
+        break;
+      }
+      case "grenade": {
+        const room = conn.room;
+        if (!room) return;
+        if (!conn.shootBucket.take()) return;
+        const p = room.players.get(conn.id);
+        if (!p) return;
+        room.throwGrenade(p, msg.kind, Number(msg.heading), Number(msg.pitch));
         return;
       }
       case "reload": {

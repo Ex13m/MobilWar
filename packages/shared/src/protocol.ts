@@ -38,6 +38,8 @@ export interface PlayerPublic {
   weapon: WeaponId;
   /** Rounds in the current magazine per weapon and spare rounds. */
   mag: Record<WeaponId, number>;
+  /** Throwables left this life. */
+  grenades: Record<GrenadeKind, number>;
   reserve: Record<WeaponId, number>;
   /** Epoch ms until a reload finishes (0 = not reloading). */
   reloadUntil: number;
@@ -59,9 +61,12 @@ export interface PlayerPublic {
   respawnAt: number;
 }
 
+/** Thrown equipment. Plasma hurts, EMP disables. */
+export type GrenadeKind = "plasma" | "emp";
+
 export interface Projectile {
   id: string;
-  kind: "rocket";
+  kind: "rocket" | "grenade";
   ownerId: string;
   team: Team;
   x: number;
@@ -70,6 +75,9 @@ export interface Projectile {
   heading: number;
   /** Server time of launch. */
   t0: number;
+  /** Grenades only: which type, and when it goes off (server time). */
+  grenade?: GrenadeKind;
+  fuseAt?: number;
 }
 
 export interface WorldObject {
@@ -220,10 +228,23 @@ export interface ListRoomsMsg {
   near?: LatLon;
 }
 
+export interface ThrowGrenadeMsg {
+  type: "grenade";
+  kind: GrenadeKind;
+  heading: number;
+  /**
+   * Aim pitch in degrees. The throw distance is read off this: level throws
+   * short, tilted up throws long (see GAME.GRENADE).
+   */
+  pitch: number;
+  ct: number;
+}
+
 export type ClientMsg =
   | JoinMsg
   | PosMsg
   | ShootMsg
+  | ThrowGrenadeMsg
   | SelectWeaponMsg
   | ReloadMsg
   | ZoomMsg
@@ -298,6 +319,8 @@ export interface EventMsg {
     | "object_placed"
     | "object_destroyed"
     | "explosion"
+    | "grenade"
+    | "shrapnel"
     | "pickup"
     | "pickup_spawned"
     | "respawn"

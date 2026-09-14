@@ -108,6 +108,51 @@ export const GAME = {
     MAX_PER_TEAM: 3,
   },
   /** Supply points a player gets per round to place objects. */
+  /**
+   * Throwables (docs/TZ.md rows 6-7). Range comes from how far the player tilts
+   * the phone up, which is why the aim pitch is now part of the protocol.
+   */
+  GRENADE: {
+    /** Tilt that throws the shortest / longest, in degrees above level. */
+    MIN_PITCH_DEG: 10,
+    MAX_PITCH_DEG: 45,
+    MIN_RANGE_M: 8,
+    MAX_RANGE_M: 18,
+    /** Time from the throw to the blast, ms. Cooking is not possible: the fuse starts on release. */
+    FUSE_MS: 2500,
+    /** How far it keeps rolling after it lands, m. */
+    ROLL_M: 1,
+    /** Apex of the throw arc, m (visual only; the blast point is on the ground). */
+    ARC_APEX_M: 4,
+    /** Minimum gap between two throws, ms. */
+    COOLDOWN_MS: 900,
+    TYPES: {
+      plasma: {
+        /** Damage at the centre, falling to `damageEdge` at `splashM`. */
+        damage: 40,
+        damageEdge: 10,
+        splashM: 5,
+        /** Fragments carry a lighter hit out to `splashM * FRAG_RANGE_MUL`. */
+        fragments: 8,
+        fragDamage: 8,
+        perLife: 2,
+        color: 0x67e8f9,
+      },
+      emp: {
+        damage: 0,
+        damageEdge: 0,
+        splashM: 8,
+        fragments: 0,
+        fragDamage: 0,
+        perLife: 1,
+        color: 0xa78bfa,
+        /** Turrets, drones and shields inside the blast stay down this long, ms. */
+        disableMs: 8000,
+      },
+    },
+    /** Fragments reach this multiple of the splash radius. */
+    FRAG_RANGE_MUL: 1.8,
+  },
   SUPPLY_PER_PLAYER: 6,
   MAX_PLAYERS_PER_ROOM: 16,
   /** Default room geofence radius (m). */
