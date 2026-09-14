@@ -97,19 +97,42 @@ export type SfxId = keyof typeof SFX;
  * firing a request for every id and collecting 404s on each launch.
  */
 export const GEN_SHIPPED: ReadonlySet<string> = new Set([
+  "g_crate",
+  "g_death",
+  "g_drone",
+  "g_emp",
+  "g_empty",
+  "g_explosion_big",
+  "g_explosion_far",
   "g_explosion_mid",
   "g_grenade",
+  "g_heartbeat",
+  "g_hit_body",
+  "g_hit_confirm",
+  "g_hit_metal",
+  "g_hit_shield",
+  "g_lockon",
   "g_minigun",
+  "g_overheat",
+  "g_pickup",
   "g_pistol_a",
   "g_pistol_b",
   "g_pistol_reload",
+  "g_respawn",
   "g_ricochet",
   "g_rifle_a",
   "g_rifle_b",
   "g_rifle_reload",
   "g_rocket",
+  "g_round_start",
+  "g_shield_up",
+  "g_siren",
   "g_sniper",
-  "g_sniper_charge"
+  "g_sniper_charge",
+  "g_sniper_reload",
+  "g_switch",
+  "g_turret",
+  "g_victory",
 ]);
 
 /** Per-weapon presentation: model, how it sits in the hand, recoil, sounds. */
