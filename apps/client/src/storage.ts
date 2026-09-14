@@ -9,6 +9,8 @@ export interface Profile {
   playMode: PlayMode;
   lastRoom?: string;
   loadout: Loadout;
+  /** Version of the onboarding the player has completed; 0 = never played. */
+  onboarded: number;
 }
 
 export function loadProfile(): Profile {
@@ -36,5 +38,5 @@ export function saveProfile(p: Profile): void {
 }
 
 function defaults(): Profile {
-  return { deviceId: uid("dev"), nick: "", avatar: "scout", playMode: "ar", loadout: defaultLoadout() };
+  return { deviceId: uid("dev"), nick: "", avatar: "scout", playMode: "ar", loadout: defaultLoadout(), onboarded: 0 };
 }

@@ -16,6 +16,137 @@ function tint(root: THREE.Object3D, color: number): void {
   });
 }
 
+/** Stable 0..1 hash of a catalog id, so a weapon always builds the same kit. */
+function hash01(id: string, salt = 0): number {
+  let h = 2166136261 ^ salt;
+  for (let i = 0; i < id.length; i++) {
+    h ^= id.charCodeAt(i);
+    h = Math.imul(h, 16777619);
+  }
+  return ((h >>> 0) % 10000) / 10000;
+}
+
+const KIT_DARK = new THREE.MeshStandardMaterial({ color: 0x22262b, roughness: 0.55, metalness: 0.8 });
+
+/**
+ * Procedural attachment kit.
+ *
+ * The catalog holds 120 variants but the asset pack only has eleven weapon
+ * meshes, so without this every gun in a slot is the same silhouette. The kit
+ * bolts primitives onto the loaded mesh — barrel, optic, magazine, rail light,
+ * heat fins — chosen deterministically from the catalog id and the trait, and
+ * tinted with the weapon's colour. Costs a handful of triangles per gun.
+ *
+ * Returns the group plus how far forward the muzzle moved, so the flash and the
+ * ejected casings still line up with the barrel.
+ */
+function buildKit(def: WeaponDef, box: THREE.Box3): { group: THREE.Group; muzzleZ: number } {
+  const g = new THREE.Group();
+  const glow = new THREE.MeshStandardMaterial({
+    color: 0x2a2f36,
+    roughness: 0.35,
+    metalness: 0.7,
+    emissive: new THREE.Color(def.color),
+    emissiveIntensity: 0.9,
+  });
+  const size = box.getSize(new THREE.Vector3());
+  const frontZ = box.min.z;
+  const topY = box.max.y;
+  const botY = box.min.y;
+  const midY = (box.min.y + box.max.y) / 2;
+  const gauge = Math.max(0.012, Math.min(size.y, size.x) * 0.16);
+  let muzzleZ = 0;
+
+  // --- barrel ---------------------------------------------------------------
+  const barrelKind = Math.floor(hash01(def.id, 1) * 4);
+  if (barrelKind === 1) {
+    // suppressor: long smooth tube
+    const len = size.z * 0.34;
+    const m = new THREE.Mesh(new THREE.CylinderGeometry(gauge * 1.5, gauge * 1.5, len, 10), KIT_DARK);
+    m.rotation.x = Math.PI / 2;
+    m.position.set(0, midY, frontZ - len / 2);
+    g.add(m);
+    muzzleZ = len;
+  } else if (barrelKind === 2) {
+    // muzzle brake: short tube with three vent rings
+    const len = size.z * 0.16;
+    const m = new THREE.Mesh(new THREE.CylinderGeometry(gauge * 1.3, gauge * 1.1, len, 8), KIT_DARK);
+    m.rotation.x = Math.PI / 2;
+    m.position.set(0, midY, frontZ - len / 2);
+    g.add(m);
+    for (let i = 0; i < 3; i++) {
+      const r = new THREE.Mesh(new THREE.TorusGeometry(gauge * 1.5, gauge * 0.25, 4, 10), glow);
+      r.position.set(0, midY, frontZ - len * (0.2 + i * 0.3));
+      g.add(r);
+    }
+    muzzleZ = len;
+  } else if (barrelKind === 3) {
+    // twin under-barrel rails
+    const len = size.z * 0.22;
+    for (const sx of [-1, 1]) {
+      const m = new THREE.Mesh(new THREE.BoxGeometry(gauge * 0.8, gauge * 0.8, len), KIT_DARK);
+      m.position.set(sx * gauge * 1.6, midY - gauge, frontZ - len / 2);
+      g.add(m);
+    }
+    muzzleZ = len * 0.6;
+  }
+
+  // --- optic ----------------------------------------------------------------
+  const opticKind = Math.floor(hash01(def.id, 2) * 4);
+  if (opticKind === 1 || def.trait === "charge") {
+    // scope: tube with a glowing objective
+    const len = size.z * 0.3;
+    const tube = new THREE.Mesh(new THREE.CylinderGeometry(gauge * 1.2, gauge * 1.2, len, 10), KIT_DARK);
+    tube.rotation.x = Math.PI / 2;
+    tube.position.set(0, topY + gauge * 1.2, box.min.z + size.z * 0.45);
+    g.add(tube);
+    const lens = new THREE.Mesh(new THREE.CircleGeometry(gauge * 1.1, 10), glow);
+    lens.position.set(0, topY + gauge * 1.2, tube.position.z - len / 2 - 0.001);
+    g.add(lens);
+  } else if (opticKind === 2) {
+    // red dot on a riser
+    const riser = new THREE.Mesh(new THREE.BoxGeometry(gauge * 1.4, gauge * 1.6, gauge * 2), KIT_DARK);
+    riser.position.set(0, topY + gauge * 0.8, box.min.z + size.z * 0.5);
+    g.add(riser);
+    const dot = new THREE.Mesh(new THREE.SphereGeometry(gauge * 0.5, 8, 6), glow);
+    dot.position.set(0, topY + gauge * 1.5, riser.position.z);
+    g.add(dot);
+  }
+
+  // --- magazine -------------------------------------------------------------
+  if (def.mag >= 40 || def.trait === "overheat") {
+    // drum
+    const d = new THREE.Mesh(new THREE.CylinderGeometry(size.y * 0.42, size.y * 0.42, gauge * 1.6, 12), KIT_DARK);
+    d.rotation.z = Math.PI / 2;
+    d.position.set(0, botY - size.y * 0.22, box.min.z + size.z * 0.62);
+    g.add(d);
+  } else if (def.mag >= 18) {
+    // extended box
+    const h = size.y * 0.5;
+    const m = new THREE.Mesh(new THREE.BoxGeometry(gauge * 2, h, gauge * 3), KIT_DARK);
+    m.position.set(0, botY - h * 0.4, box.min.z + size.z * 0.62);
+    g.add(m);
+  }
+
+  // --- rail light / laser ---------------------------------------------------
+  if (hash01(def.id, 3) > 0.55) {
+    const l = new THREE.Mesh(new THREE.CylinderGeometry(gauge * 0.6, gauge * 0.6, size.z * 0.16, 8), glow);
+    l.rotation.x = Math.PI / 2;
+    l.position.set(gauge * 2, midY - gauge * 0.8, frontZ + size.z * 0.1);
+    g.add(l);
+  }
+
+  // --- heat fins: the loud, hot traits wear their cooling on the outside -----
+  if (def.trait === "burn" || def.trait === "overheat" || def.trait === "emp") {
+    for (let i = 0; i < 4; i++) {
+      const f = new THREE.Mesh(new THREE.BoxGeometry(gauge * 3, gauge * 0.3, gauge * 0.8), glow);
+      f.position.set(0, topY + gauge * 0.2, box.min.z + size.z * (0.2 + i * 0.09));
+      g.add(f);
+    }
+  }
+  return { group: g, muzzleZ };
+}
+
 /** Critically damped spring on a scalar. */
 class Spring {
   v = 0;
@@ -44,6 +175,7 @@ export class Viewmodel {
   readonly root = new THREE.Group();
   private holder = new THREE.Group();
   private model: THREE.Object3D | null = null;
+  private kit: THREE.Group | null = null;
   private weapon: WeaponId = "blaster";
   private def: WeaponDef | null = null;
   private back = new Spring(160, 22);
@@ -112,7 +244,10 @@ export class Viewmodel {
     const m = await loadModel(modelId);
     if (seq !== this.loading) return;
     if (this.model) this.holder.remove(this.model);
-    const scale = MODEL_SCALE[modelId] ?? p.scale;
+    // Two or three meshes cover thirty variants per slot, so give each catalog
+    // id its own size as well as its own kit: heavier guns read bigger in hand.
+    const bulk = def ? 0.9 + hash01(def.id, 7) * 0.26 : 1;
+    const scale = (MODEL_SCALE[modelId] ?? p.scale) * bulk;
     m.scale.setScalar(scale);
     m.rotation.set(p.rot[0], p.rot[1], p.rot[2]);
     if (def) tint(m, def.color);
@@ -125,7 +260,18 @@ export class Viewmodel {
     this.holder.position.set(p.pos[0], p.pos[1], p.pos[2]);
     // muzzle = front of the bounding box along the barrel (-Z after rotation)
     const box2 = new THREE.Box3().setFromObject(m);
-    const mz = new THREE.Vector3(0, (box2.min.y + box2.max.y) / 2 + 0.03, box2.min.z);
+    if (this.kit) {
+      this.holder.remove(this.kit);
+      this.kit = null;
+    }
+    let muzzleZ = box2.min.z;
+    if (def) {
+      const { group, muzzleZ: ext } = buildKit(def, box2);
+      this.kit = group;
+      this.holder.add(group);
+      muzzleZ -= ext;
+    }
+    const mz = new THREE.Vector3(0, (box2.min.y + box2.max.y) / 2 + 0.03, muzzleZ);
     this.flash.position.copy(mz);
     this.flash2.position.copy(mz);
     this.flashLight.position.copy(mz);

@@ -3,22 +3,27 @@ import { Game } from "./game.js";
 import { Sensors, isSecure } from "./sensors.js";
 import { loadProfile } from "./storage.js";
 import { showLobby } from "./ui/lobby.js";
+import { ONBOARDING_VERSION, showOnboarding } from "./ui/onboarding.js";
+import { checkForUpdate } from "./update.js";
 
 const root = document.getElementById("app")!;
 const profile = loadProfile();
 const sensors = new Sensors();
 const audio = new GameAudio();
 
-if ("serviceWorker" in navigator && location.protocol === "https:") {
-  window.addEventListener("load", () => navigator.serviceWorker.register("/sw.js").catch(() => undefined));
-}
-
 async function boot(): Promise<void> {
   if (!isSecure()) {
     root.innerHTML = `<div class="screen"><div class="card"><h2>Нужен HTTPS</h2><p class="sub">Камера, GPS и компас работают только по защищённому соединению.</p></div></div>`;
     return;
   }
+  // Installed PWAs keep serving their cached bundle, so every launch checks for
+  // a newer build first; if one exists this reloads and never comes back.
+  root.innerHTML = `<div class="screen"><div class="card"><h2>MobilWar</h2><p class="sub">Проверяю обновления…</p></div></div>`;
+  const { reloading } = await checkForUpdate();
+  if (reloading) return;
+
   sensors.start(); // GPS starts asking permission immediately so the lobby can show nearby zones
+  if ((profile.onboarded ?? 0) < ONBOARDING_VERSION) await showOnboarding(root, profile);
   for (;;) {
     const res = await showLobby(root, profile, () => (sensors.fix ? { lat: sensors.fix.lat, lon: sensors.fix.lon } : null));
     // Permission gate (must be a user gesture on iOS)

@@ -193,3 +193,13 @@ h2 { font-size: 18px; margin: 0 0 8px; }
 .hud .wprev, .hud .wnext { width: 40px; min-width: 40px; flex: 0 0 40px; background: var(--panel); border: 2px solid #374151; border-radius: 12px; color: var(--fg); font-size: 22px; line-height: 1; }
 .hud .wpick { flex: 1; background: var(--panel); border: 2px solid var(--accent); border-radius: 12px; color: var(--accent); min-height: 40px; font-size: 13px; font-weight: 700; }
 .hud .reload, .hud .zoom { flex: 0 0 48px; font-size: 18px; }
+
+/* --- onboarding ---------------------------------------------------------- */
+.onboarding { display: flex; align-items: center; justify-content: center; }
+.ob-card { max-width: 420px; width: 100%; text-align: center; }
+.ob-art { width: 120px; height: 120px; display: block; margin: 4px auto 12px; }
+.ob-card h2 { margin: 0 0 8px; }
+.ob-card .sub { text-align: left; }
+.ob-dots { display: flex; gap: 6px; justify-content: center; margin: 14px 0 12px; }
+.ob-dots i { width: 7px; height: 7px; border-radius: 50%; background: #374151; }
+.ob-dots i.on { background: var(--accent, #22d3ee); }

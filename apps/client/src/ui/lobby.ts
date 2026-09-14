@@ -2,6 +2,8 @@ import { AVATARS, GAME, type AvatarId, type GameMode, type PlayMode, type RoomIn
 import { createRoom, listRooms } from "../api.js";
 import { renderLoadout } from "./loadout.js";
 import { saveProfile, type Profile } from "../storage.js";
+import { showOnboarding } from "./onboarding.js";
+import { BUILD_ID } from "../update.js";
 
 export interface LobbyResult {
   roomId: string;
@@ -74,10 +76,21 @@ export function showLobby(root: HTMLElement, profile: Profile, getFix: () => { l
           <p class="hint" style="margin-top:8px">Судья: открой <b>/referee.html?room=КОД</b> на планшете.</p>
         </div>
         <p class="hint" id="netstat">Подключение…</p>
+        <div style="display:flex;gap:8px;align-items:center;justify-content:space-between">
+          <button class="btn secondary" id="howto">Как играть</button>
+          <span class="hint">сборка ${esc(BUILD_ID)}</span>
+        </div>
       </div>`;
 
     const $ = <T extends HTMLElement>(s: string) => root.querySelector(s) as T;
     const err = $("#err");
+
+    $("#howto").addEventListener("click", () => {
+      // Replay the walkthrough, then rebuild the lobby from scratch.
+      void showOnboarding(root, profile).then(() => {
+        void showLobby(root, profile, getFix).then(resolve);
+      });
+    });
 
     $("#avatars").addEventListener("click", (e) => {
       const chip = (e.target as HTMLElement).closest<HTMLElement>(".chip");
