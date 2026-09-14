@@ -155,7 +155,10 @@ export interface ShootMsg {
   /** Sniper: zoomed when fired. */
   zoomed?: boolean;
   heading: number;
-  /** Pitch in degrees, positive = up. Used only for AR feedback; hits are 2D. */
+  /**
+   * Pitch in degrees, positive = up. The server gates hits against the
+   * target's elevation, so aiming up or down actually misses.
+   */
   pitch: number;
   ct: number;
 }
@@ -257,6 +260,8 @@ export interface ShotEventMsg {
   x: number;
   z: number;
   heading: number;
+  /** Elevation of the shot in degrees, positive = up (for the tracer on other clients). */
+  pitch?: number;
   /** Target hit, if any. */
   targetId?: string;
   targetKind?: "player" | "object";

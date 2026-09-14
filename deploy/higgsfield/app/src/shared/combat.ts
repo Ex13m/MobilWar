@@ -41,8 +41,8 @@ function clampAcc(a: number): number {
 
 /**
  * Resolve a shot: find the best target in the cone within range.
- * Deterministic, 2D (ground plane), used server-side (authoritative) and
- * client-side (for immediate feedback).
+ * Deterministic, 2D on the ground plane plus a vertical gate on the aim pitch;
+ * used server-side (authoritative) and client-side (for immediate feedback).
  */
 export function resolveShot(
   shooter: Shooter,
@@ -50,8 +50,14 @@ export function resolveShot(
   targets: Target[],
   rangeM: number = GAME.RIFLE_RANGE_M,
   cone: ConeFn = GAME.CONE_HALF_ANGLE_DEG,
+  opts: { pitch?: number; vertHalfAngle?: number } = {},
 ): HitCandidate | null {
   let best: HitCandidate | null = null;
+  // Vertical gate: everyone stands on the same ground plane, so a shot only
+  // counts while the phone is aimed roughly level. Undefined pitch (older
+  // clients, turrets, drones) skips the gate.
+  const vAllowed = opts.vertHalfAngle ?? GAME.VERT_HALF_ANGLE_DEG;
+  if (Number.isFinite(opts.pitch) && Math.abs(opts.pitch as number) > vAllowed) return null;
   for (const t of targets) {
     const dist = distLocal(shooter, t);
     if (dist > rangeM || dist < 0.3) continue;
