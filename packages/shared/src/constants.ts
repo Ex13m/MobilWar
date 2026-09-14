@@ -53,6 +53,13 @@ export const GAME = {
    * that pointing the phone at the sky or at your own feet is a clean miss.
    */
   VERT_HALF_ANGLE_DEG: 22,
+  /**
+   * Lag compensation. A client renders other players INTERP_DELAY_MS in the
+   * past, so a shot is resolved against where the target was on the shooter's
+   * screen. The cap bounds how far back a bad connection can rewind the world,
+   * which is what stops "I died behind cover".
+   */
+  MAX_REWIND_MS: 400,
   /** Minimum time dead before respawn is possible, ms. */
   RESPAWN_MS: 8000,
   /** After this extra time a dead player respawns even without reaching the base, ms. */

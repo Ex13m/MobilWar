@@ -321,6 +321,8 @@ export interface EventMsg {
     | "explosion"
     | "grenade"
     | "shrapnel"
+    | "lock_on"
+    | "lock_lost"
     | "pickup"
     | "pickup_spawned"
     | "respawn"

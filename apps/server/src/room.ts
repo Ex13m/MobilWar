@@ -60,6 +60,15 @@ export interface Player extends PlayerPublic {
   infected?: boolean;
   /** Per-weapon last shot time. */
   lastShotByWeapon: Record<WeaponId, number>;
+  /**
+   * Recent positions, newest last. Shots are resolved against where a target
+   * was on the shooter's screen, not where they are now, so this has to go back
+   * at least as far as the client's interpolation delay.
+   */
+  history: Array<{ t: number; x: number; z: number }>;
+  /** Target the player has been holding their aim on, and since when. */
+  aimId: string | null;
+  aimSince: number;
   /** Server time of the last throw, for the grenade cooldown. */
   lastGrenadeAt: number;
   /** Shields stay down until this server time after an EMP. */
@@ -265,6 +274,9 @@ export class Room {
       overchargeUntil: 0,
       protectedUntil: 0,
       lastShotByWeapon: { pistol: 0, blaster: 0, sniper: 0, rocket: 0 },
+      history: [],
+      aimId: null,
+      aimSince: 0,
       lastGrenadeAt: 0,
       empUntil: 0,
       grenades: fullGrenades(),
@@ -322,6 +334,9 @@ export class Room {
     const v = toLocal(this.origin, sample);
     p.x = v.x;
     p.z = v.z;
+    p.history.push({ t, x: v.x, z: v.z });
+    // Two seconds is comfortably more than the rewind window and costs nothing.
+    while (p.history.length > 2 && p.history[0]!.t < t - 2000) p.history.shift();
     p.acc = acc;
     p.heading = ((heading % 360) + 360) % 360;
     p.t = t;
@@ -458,9 +473,15 @@ export class Room {
     const charged = W.trait === "charge" && charge >= W.chargeMs;
     const enemies = [...this.players.values()].filter((q) => q.id !== p.id && q.alive && !q.isReferee && this.isEnemy(p, q) && q.lastSample && q.protectedUntil <= t);
     const allies = W.trait === "heal" ? [...this.players.values()].filter((q) => q.id !== p.id && q.alive && !q.isReferee && !this.isEnemy(p, q) && q.lastSample && q.hp < GAME.MAX_HP) : [];
+    // Rewind the world to what the shooter's screen was showing.
+    const rewindTo = t - Math.min(GAME.MAX_REWIND_MS, GAME.INTERP_DELAY_MS);
+    const at = (q: Player) => {
+      const v = this.positionAt(q, rewindTo);
+      return { id: q.id, x: v.x, z: v.z, acc: q.acc };
+    };
     const targets = [
-      ...enemies.map((q) => ({ id: q.id, x: q.x, z: q.z, acc: q.acc })),
-      ...allies.map((q) => ({ id: q.id, x: q.x, z: q.z, acc: q.acc })),
+      ...enemies.map(at),
+      ...allies.map(at),
       ...[...this.objects.values()]
         .filter((o) => o.hp > 0 && o.team !== null && o.team !== p.team && (o.kind === "turret" || o.kind === "drone"))
         .map((o) => ({ id: o.id, x: o.x, z: o.z, acc: 0 })),
@@ -668,6 +689,71 @@ export class Room {
       if (obj && obj.hp > 0) this.damageObject(obj, h.damage);
     }
     this.pendingHits = still;
+  }
+
+  /**
+   * Where a player was at server time `at`, interpolated from their history the
+   * same way the client interpolates them for rendering. Falls back to the live
+   * position when the history does not reach that far.
+   */
+  private positionAt(p: Player, at: number): { x: number; z: number } {
+    const h = p.history;
+    if (h.length === 0) return { x: p.x, z: p.z };
+    if (at >= h[h.length - 1]!.t) return { x: p.x, z: p.z };
+    if (at <= h[0]!.t) return { x: h[0]!.x, z: h[0]!.z };
+    let i = h.length - 1;
+    while (i > 0 && h[i - 1]!.t > at) i--;
+    const a = h[i - 1] ?? h[0]!;
+    const b = h[i]!;
+    const span = Math.max(1, b.t - a.t);
+    const k = Math.min(1, Math.max(0, (at - a.t) / span));
+    return { x: a.x + (b.x - a.x) * k, z: a.z + (b.z - a.z) * k };
+  }
+
+  /**
+   * Track who each player is holding their aim on. Holding steady on one target
+   * is the only thing in a GPS shooter that reads as skill, so it breaks ties
+   * in target selection and drives the lock-on cue in the HUD.
+   */
+  private tickAim(t: number): void {
+    for (const p of this.players.values()) {
+      if (!p.alive || p.isReferee || !p.lastSample) {
+        p.aimId = null;
+        continue;
+      }
+      const W = this.def(p, p.weapon);
+      const rewindTo = t - Math.min(GAME.MAX_REWIND_MS, GAME.INTERP_DELAY_MS);
+      const targets = [...this.players.values()]
+        .filter((q) => q.id !== p.id && q.alive && !q.isReferee && this.isEnemy(p, q) && q.lastSample)
+        .map((q) => {
+          const v = this.positionAt(q, rewindTo);
+          return { id: q.id, x: v.x, z: v.z, acc: q.acc };
+        });
+      // A tighter cone than the shot uses: this is "on target", not "would hit".
+      const hot = resolveShot({ x: p.x, z: p.z, acc: p.acc }, p.heading, targets, W.rangeM, (d) => Math.min(8, catalogCone(W, d, 0, p.zoomed)));
+      if (!hot) {
+        if (p.aimId !== null) p.client.send({ type: "event", kind: "lock_lost", data: {} });
+        p.aimId = null;
+        continue;
+      }
+      if (p.aimId !== hot.id) {
+        p.aimId = hot.id;
+        p.aimSince = t;
+      } else if (t - p.aimSince >= 500 && t - p.aimSince < 500 + 1000 / GAME.TICK_HZ) {
+        // Crossed half a second on the same target: tell the client once.
+        p.client.send({ type: "event", kind: "lock_on", data: { id: hot.id } });
+      }
+    }
+  }
+
+  /** Test seam: the rewound position used for hit resolution. */
+  positionAtForTest(p: Player, at: number): { x: number; z: number } {
+    return this.positionAt(p, at);
+  }
+
+  /** Test seam: the room's clock. */
+  nowForTest(): number {
+    return this.now();
   }
 
   private tickProjectiles(t: number): void {
@@ -984,6 +1070,7 @@ export class Room {
     for (const p of this.players.values()) this.settleReload(p, t);
     this.tickBurn(t);
     this.tickRespawns(t);
+    this.tickAim(t);
     this.tickPendingHits(t);
     this.tickProjectiles(t);
     this.tickTurrets(t);

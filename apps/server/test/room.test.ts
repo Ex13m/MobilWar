@@ -246,6 +246,30 @@ describe("Room", () => {
     }
   });
 
+  it("lag compensation: the shot is resolved against where the target was on screen", () => {
+    const { room, pa, pb, advance, startPlaying } = setup();
+    startPlaying();
+    room.updatePosition(pa, origin.lat, origin.lon, 1, 0);
+    // The target walks east across the shooter's front at 20 m out.
+    const track = (east: number) => destination(destination(origin, 0, 20), 90, east);
+    let p0 = track(0);
+    room.updatePosition(pb, p0.lat, p0.lon, 1, 90);
+    // Four position updates over a second: the client is rendering the oldest
+    // of them, a quarter second behind.
+    for (let e = 2; e <= 8; e += 2) {
+      advance(250);
+      const q = track(e);
+      room.updatePosition(pb, q.lat, q.lon, 1, 90);
+    }
+    // Aim at where the screen still shows them, not at where they now are.
+    const shown = room.positionAtForTest(pb, room.nowForTest() - GAME.INTERP_DELAY_MS);
+    const brg = (Math.atan2(shown.x, -shown.z) * 180) / Math.PI;
+    room.shoot(pa, brg, "sniper", { zoomed: true });
+    advance(400);
+    room.tick();
+    expect(pb.hp, "the round lands where the shooter saw them").toBeLessThan(GAME.MAX_HP);
+  });
+
   it("shot misses when aiming away", () => {
     const { room, pa, pb, startPlaying } = setup();
     startPlaying();
