@@ -46,6 +46,7 @@ export class Game {
   private zoomed = false;
   private reloadStart = 0;
   private reloadEnd = 0;
+  private lastGrenadeAt = 0;
   private lastChargeTone = 0;
   private lastFixSentT = 0;
   private wakeLock: WakeLockSentinel | null = null;
@@ -80,6 +81,7 @@ export class Game {
         onFire: () => this.trigger(),
         onFireEnd: () => this.triggerEnd(),
         onFireRocket: () => this.fire("rocket"),
+        onGrenade: (kind) => this.throwGrenade(kind),
         onWeapon: (w) => this.selectWeapon(w),
         onPick: (slot, id) => this.equip(slot, id),
         onCycle: (dir) => this.equip(this.weapon, cycleWeapon(this.o.profile.loadout, this.weapon, dir)),
@@ -321,6 +323,22 @@ export class Game {
     }
   }
 
+  /** Throw a grenade: range comes from how far the phone is tilted up. */
+  private throwGrenade(kind: "plasma" | "emp"): void {
+    const now = performance.now();
+    if (!this.world.me.alive) return;
+    const left = this.world.myPlayer()?.grenades?.[kind] ?? 0;
+    if (left <= 0) {
+      this.o.audio.empty();
+      this.hud?.banner(kind === "emp" ? "ЭМИ-гранат нет" : "Гранат нет", "warn", 1200);
+      return;
+    }
+    if (now - this.lastGrenadeAt < GAME.GRENADE.COOLDOWN_MS) return;
+    this.lastGrenadeAt = now;
+    this.net.send({ type: "grenade", kind, heading: this.o.sensors.orient.heading, pitch: this.o.sensors.orient.pitch, ct: now });
+    this.o.audio.play("g_switch", { gain: 0.6 });
+  }
+
   private aimTarget(): { id: string; x: number; z: number } | null {
     const w = this.weapon;
     const me = this.world.myPlayer();
@@ -481,7 +499,18 @@ export class Game {
       object_placed: "Объект установлен",
       object_destroyed: "Объект уничтожен",
       pickup_spawned: "Появился бонус",
+      drone_returning: "Дрон ушёл на перезарядку",
+      drone_rearmed: "Дрон снова в строю",
     };
+    if (kind === "lock_on") {
+      this.hud?.setLock(true);
+      this.o.audio.play("g_lockon", { gain: 0.8 });
+      return;
+    }
+    if (kind === "lock_lost") {
+      this.hud?.setLock(false);
+      return;
+    }
     switch (kind) {
       case "explosion": {
         const x = Number(data?.x);
@@ -621,6 +650,7 @@ export class Game {
       const me = this.world.myPlayer();
       this.hud.setVitals(this.world.me.hp, this.world.me.shield, this.world.me.ammo, me?.supply ?? 0);
       if (me) this.hud.setAmmo(me.mag, me.reserve);
+      if (me?.grenades) this.hud.setGrenades(me.grenades.plasma, me.grenades.emp);
       const rl = this.reloadEnd > now ? (now - this.reloadStart) / Math.max(1, this.reloadEnd - this.reloadStart) : null;
       this.hud.setReloading(rl);
       if (this.chargeStart) {

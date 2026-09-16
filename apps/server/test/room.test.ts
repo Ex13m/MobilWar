@@ -284,7 +284,7 @@ describe("Room", () => {
       room.tick();
       pb.hp = GAME.MAX_HP; // keep the target alive so the drone keeps shooting
     }
-    const d = room.objects.get(drone.id) as { ammo: number; returning: boolean };
+    const d = room.objects.get(drone.id) as unknown as { ammo: number; returning: boolean };
     expect(d.ammo).toBe(0);
     expect(d.returning).toBe(true);
     // Take the target away, otherwise it reloads and immediately empties again.
@@ -294,7 +294,7 @@ describe("Room", () => {
       advance(500);
       room.tick();
     }
-    const after = room.objects.get(drone.id) as { ammo: number; returning: boolean };
+    const after = room.objects.get(drone.id) as unknown as { ammo: number; returning: boolean };
     expect(after.ammo).toBe(D.MAG);
     expect(after.returning).toBe(false);
   });

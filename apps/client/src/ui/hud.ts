@@ -6,6 +6,8 @@ export interface HudCallbacks {
   onFire(): void;
   onFireEnd(): void;
   onFireRocket(): void;
+  /** Throw a grenade of the given kind. */
+  onGrenade(kind: "plasma" | "emp"): void;
   onWeapon(w: WeaponId): void;
   /** Picker on the HUD: a catalog variant chosen for a slot, or cycle ±1 in the active slot. */
   onPick(slot: WeaponId, weaponId: string): void;
@@ -43,7 +45,7 @@ export class Hud {
         <div class="streak" hidden>серия <b>0</b></div>
         <div class="feed"></div>
         <div class="radar"><canvas width="192" height="192"></canvas></div>
-        <div class="crosshair"><i class="hm"></i><i class="charge"></i></div>
+        <div class="crosshair"><i class="hm"></i><i class="charge"></i><i class="lock"></i></div>
         <div class="scope" hidden></div>
         <div class="reloadbar" hidden><i></i><span>перезарядка</span></div>
         <div class="banner" hidden></div>
@@ -83,6 +85,7 @@ export class Hud {
             </div>
           </div>
           <div class="firecol">
+            <button class="nade" title="Граната">💣<small class="nadeN">2</small></button>
             <button class="fire2" title="Ракета">🚀</button>
             <button class="fire">Огонь</button>
           </div>
@@ -90,6 +93,34 @@ export class Hud {
       </div>`,
     );
     this.el = root.querySelector(".hud")!;
+    // Tap throws plasma; a long press switches to the EMP, which is the rarer
+    // of the two and should not be spent by a mistimed tap.
+    const nade = this.q<HTMLButtonElement>(".nade");
+    let nadeHeld: number | null = null;
+    let nadeLong = false;
+    const nadeDown = (e: Event) => {
+      e.preventDefault();
+      nadeLong = false;
+      nadeHeld = window.setTimeout(() => {
+        nadeLong = true;
+        nade.classList.add("emp");
+      }, 450);
+    };
+    const nadeUp = (e: Event) => {
+      e.preventDefault();
+      if (nadeHeld) window.clearTimeout(nadeHeld);
+      nadeHeld = null;
+      nade.classList.remove("emp");
+      cb.onGrenade(nadeLong ? "emp" : "plasma");
+    };
+    nade.addEventListener("pointerdown", nadeDown);
+    nade.addEventListener("pointerup", nadeUp);
+    nade.addEventListener("pointercancel", () => {
+      if (nadeHeld) window.clearTimeout(nadeHeld);
+      nadeHeld = null;
+      nade.classList.remove("emp");
+    });
+
     const fire = this.q<HTMLButtonElement>(".fire");
     let holdTimer: number | null = null;
     const startFire = (e: Event) => {
@@ -279,6 +310,17 @@ export class Hud {
     void d.offsetWidth;
     d.classList.add("show");
   }
+  /** Grenades left this life, shown on the throw button. */
+  setGrenades(plasma: number, emp: number): void {
+    this.q(".nadeN").textContent = `${plasma}+${emp}`;
+    this.q<HTMLButtonElement>(".nade").disabled = plasma + emp <= 0;
+  }
+
+  /** Lock-on ring around the crosshair: the rocket will follow this target. */
+  setLock(on: boolean): void {
+    this.el.querySelector(".crosshair")!.classList.toggle("locked", on);
+  }
+
   setCompass(h: number): void {
     const c = this.q(".compass");
     // Split so the bearing reads as an instrument. As one string the degree
