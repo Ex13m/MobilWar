@@ -217,3 +217,11 @@ h2 { font-size: 18px; margin: 0 0 8px; }
 .hud .crosshair .lock { position: absolute; left: 50%; top: 50%; width: 54px; height: 54px; margin: -27px 0 0 -27px; border: 2px solid var(--warn, #f59e0b); border-radius: 50%; opacity: 0; transform: scale(1.5); transition: opacity .12s, transform .12s; }
 .hud .crosshair.locked .lock { opacity: .95; transform: scale(1); animation: lockpulse .9s ease-in-out infinite; }
 @keyframes lockpulse { 50% { opacity: .5; } }
+
+/* --- swipe-to-fire layer --------------------------------------------------- */
+/* Sits above the camera and below every control, so a flick over empty screen
+   fires while taps on the HUD still reach their buttons. */
+.hud .swipe { position: absolute; inset: 0; z-index: 1; touch-action: none; }
+.hud .swipe canvas { width: 100%; height: 100%; display: block; }
+.hud .top, .hud .menu, .hud .compass, .hud .radar, .hud .feed, .hud .bottom,
+.hud .crosshair, .hud .banner, .hud .dead, .hud .place-menu, .hud .picker { z-index: 2; }

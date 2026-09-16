@@ -82,6 +82,13 @@ export class Game {
         onFireEnd: () => this.triggerEnd(),
         onFireRocket: () => this.fire("rocket"),
         onGrenade: (kind) => this.throwGrenade(kind),
+        onSwipeFire: (power) => {
+          // A long flick charges the shot for weapons that have a charge; the
+          // rest simply fire.
+          const def = weaponById(this.o.profile.loadout[this.weapon]);
+          const charge = def && def.chargeMs > 0 ? def.chargeMs * power : 0;
+          this.fire(this.weapon, charge);
+        },
         onWeapon: (w) => this.selectWeapon(w),
         onPick: (slot, id) => this.equip(slot, id),
         onCycle: (dir) => this.equip(this.weapon, cycleWeapon(this.o.profile.loadout, this.weapon, dir)),
