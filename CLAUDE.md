@@ -9,5 +9,6 @@
 - Координаты: ENU относительно `room.origin`, x = восток, z = юг (three.js: север = -Z). Все константы в `packages/shared/src/constants.ts`.
 - Любое изменение протокола — в `packages/shared/src/protocol.ts` + тест в `apps/server/test`.
 - Ассеты: только CC0/MIT (реестр в `apps/client/public/assets/LICENSES.md`, регистр в `apps/client/src/assets.ts`). Бюджет загрузки клиента 3 МБ; модели GLB ≤ 150 КБ, спрайты ≤ 256 px, звуки OGG. Эффекты (заряды, взрывы, цифры урона) — `apps/client/src/fx`, оружие от первого лица — `apps/client/src/ar/weapons.ts`.
+- Дизайн: `docs/DESIGN.md` — визуальный канон (основа AgentQL из Refero). Обязателен для всего UI.
 - Документация: `docs/REVIEW.md` (обзор для ревьюера: боевая модель, пробелы, что проверять), `docs/TZ.md` (ТЗ на полноценный бой), `docs/GDD.md`, `docs/ARCHITECTURE.md`, `docs/LOOT_AND_RESPAWN.md`, `docs/research/` (рынок, библиотеки и ассеты).
 - Смоук в headless Chromium: сервер `:8080`, `vite preview :4173`, скрипт в scratchpad `smoke2.mjs` (синтетическая ориентация через DeviceOrientationEvent на оба имени события).
