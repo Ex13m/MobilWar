@@ -270,6 +270,83 @@ describe("Room", () => {
     expect(pb.hp, "the round lands where the shooter saw them").toBeLessThan(GAME.MAX_HP);
   });
 
+  it("a drone empties its magazine, flies home, reloads and resumes", () => {
+    const { room, pa, pb, advance, startPlaying } = setup();
+    startPlaying();
+    room.updatePosition(pa, origin.lat, origin.lon, 5, 0);
+    const drone = room.placeObject(pa, "drone")!;
+    // Enemy stands inside the drone's reach so it keeps firing.
+    const near = destination(origin, 0, 6);
+    room.updatePosition(pb, near.lat, near.lon, 5, 180);
+    const D = GAME.DRONE;
+    for (let i = 0; i < D.MAG + 4; i++) {
+      advance(D.COOLDOWN_MS + 1);
+      room.tick();
+      pb.hp = GAME.MAX_HP; // keep the target alive so the drone keeps shooting
+    }
+    const d = room.objects.get(drone.id) as { ammo: number; returning: boolean };
+    expect(d.ammo).toBe(0);
+    expect(d.returning).toBe(true);
+    // Take the target away, otherwise it reloads and immediately empties again.
+    pb.alive = false;
+    // Give it time to reach the anchor and sit out the reload.
+    for (let i = 0; i < Math.ceil(D.RELOAD_MS / 500) + 6; i++) {
+      advance(500);
+      room.tick();
+    }
+    const after = room.objects.get(drone.id) as { ammo: number; returning: boolean };
+    expect(after.ammo).toBe(D.MAG);
+    expect(after.returning).toBe(false);
+  });
+
+  it("a drone chews through enemy cover when no player is in reach", () => {
+    const { room, pa, pb, advance, startPlaying } = setup();
+    startPlaying();
+    // Blue places cover; red's drone goes to work on it.
+    const spot = destination(origin, 0, 5);
+    room.updatePosition(pb, spot.lat, spot.lon, 5, 0);
+    const wall = room.placeObject(pb, "barrier")!;
+    const hp0 = wall.hp;
+    room.updatePosition(pa, origin.lat, origin.lon, 5, 0);
+    room.placeObject(pa, "drone");
+    // Move the enemy far away so the drone has no player to prefer.
+    const far = destination(origin, 180, 80);
+    pb.x = 0;
+    pb.z = 80;
+    pb.lastSample = { lat: far.lat, lon: far.lon, acc: 5, t: room.nowForTest() };
+    for (let i = 0; i < 6; i++) {
+      advance(GAME.DRONE.COOLDOWN_MS + 1);
+      room.tick();
+    }
+    expect(room.objects.get(wall.id)?.hp ?? 0).toBeLessThan(hp0);
+  });
+
+  it("a held rocket locks on and the shell steers after its target", () => {
+    const { room, pa, pb, a, advance, startPlaying } = setup();
+    startPlaying();
+    room.updatePosition(pa, origin.lat, origin.lon, 5, 0);
+    const north = destination(origin, 0, 30);
+    room.updatePosition(pb, north.lat, north.lon, 5, 180);
+    room.selectWeapon(pa, "rocket");
+    a.inbox.length = 0;
+    // Hold the aim on the target until the lock completes.
+    for (let i = 0; i < 12; i++) {
+      advance(100);
+      room.tick();
+    }
+    expect(a.inbox.some((m) => m.type === "event" && m.kind === "lock_on")).toBe(true);
+    room.shoot(pa, 0, "rocket");
+    const pr = [...room.projectiles.values()][0]!;
+    expect(pr.lockedTargetId).toBe(pb.id);
+    // The target sidesteps; the shell should turn after it rather than fly on.
+    const east = destination(destination(origin, 0, 30), 90, 10);
+    room.updatePosition(pb, east.lat, east.lon, 5, 180);
+    const h0 = pr.heading;
+    advance(200);
+    room.tick();
+    expect(Math.abs(pr.heading - h0)).toBeGreaterThan(0);
+  });
+
   it("shot misses when aiming away", () => {
     const { room, pa, pb, startPlaying } = setup();
     startPlaying();

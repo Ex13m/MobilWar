@@ -323,6 +323,8 @@ export interface EventMsg {
     | "shrapnel"
     | "lock_on"
     | "lock_lost"
+    | "drone_returning"
+    | "drone_rearmed"
     | "pickup"
     | "pickup_spawned"
     | "respawn"

@@ -96,6 +96,11 @@ interface Drone extends WorldObject {
   cx: number;
   cz: number;
   phase: number;
+  /** Shots left before it has to go home. */
+  ammo: number;
+  /** Set while it is flying back or sitting on its anchor; it holds fire. */
+  reloadingUntil: number;
+  returning: boolean;
 }
 
 interface ServerProjectile extends Projectile {
@@ -104,6 +109,8 @@ interface ServerProjectile extends Projectile {
   /** Where the projectile will self-detonate (aimed distance). */
   maxDist: number;
   travelled: number;
+  /** A guided rocket steers toward this target for as long as it exists. */
+  lockedTargetId?: string;
   /** Grenades: where the throw started, so the arc is a function of time, not of tick size. */
   x0?: number;
   z0?: number;
@@ -595,7 +602,14 @@ export class Room {
     const targets = [...this.players.values()]
       .filter((q) => q.id !== p.id && q.alive && !q.isReferee && (heal ? !this.isEnemy(p, q) : this.isEnemy(p, q)) && q.lastSample)
       .map((q) => ({ id: q.id, x: q.x, z: q.z, acc: q.acc }));
-    const aimed = resolveShot({ x: p.x, z: p.z, acc: p.acc }, p.heading, targets, W.rangeM, W.cone, { pitch: aimPitch });
+    // A completed lock wins over the cone search: that is what "guided" means.
+    const locked = p.aimId && this.now() - p.aimSince >= GAME.ROCKET_LOCK.MS ? p.aimId : null;
+    const aimed = locked
+      ? (() => {
+          const q = this.players.get(locked) ?? this.objects.get(locked);
+          return q ? { id: locked, dist: distLocal(p, q), angErr: 0, allowed: 0, score: 1 } : null;
+        })()
+      : resolveShot({ x: p.x, z: p.z, acc: p.acc }, p.heading, targets, W.rangeM, W.cone, { pitch: aimPitch });
     const proj: ServerProjectile = {
       id: uid("rk"),
       kind: "rocket",
@@ -607,6 +621,7 @@ export class Room {
       heading: p.heading,
       t0: t,
       lastT: t,
+      lockedTargetId: locked ?? undefined,
       maxDist: aimed ? Math.min(W.rangeM, aimed.dist) : W.rangeM,
       travelled: 0,
       def: W,
@@ -723,14 +738,21 @@ export class Room {
       }
       const W = this.def(p, p.weapon);
       const rewindTo = t - Math.min(GAME.MAX_REWIND_MS, GAME.INTERP_DELAY_MS);
-      const targets = [...this.players.values()]
-        .filter((q) => q.id !== p.id && q.alive && !q.isReferee && this.isEnemy(p, q) && q.lastSample)
-        .map((q) => {
-          const v = this.positionAt(q, rewindTo);
-          return { id: q.id, x: v.x, z: v.z, acc: q.acc };
-        });
+      const targets = [
+        ...[...this.players.values()]
+          .filter((q) => q.id !== p.id && q.alive && !q.isReferee && this.isEnemy(p, q) && q.lastSample)
+          .map((q) => {
+            const v = this.positionAt(q, rewindTo);
+            return { id: q.id, x: v.x, z: v.z, acc: q.acc };
+          }),
+        // Cover, turrets and drones are lockable too: the heavy slot exists to
+        // clear them, and a guided rocket needs something to be guided at.
+        ...[...this.objects.values()]
+          .filter((o) => o.hp > 0 && o.team !== null && o.team !== p.team && (o.kind === "barrier" || o.kind === "turret" || o.kind === "drone"))
+          .map((o) => ({ id: o.id, x: o.x, z: o.z, acc: 0 })),
+      ];
       // A tighter cone than the shot uses: this is "on target", not "would hit".
-      const hot = resolveShot({ x: p.x, z: p.z, acc: p.acc }, p.heading, targets, W.rangeM, (d) => Math.min(8, catalogCone(W, d, 0, p.zoomed)));
+      const hot = resolveShot({ x: p.x, z: p.z, acc: p.acc }, p.heading, targets, W.rangeM, GAME.ROCKET_LOCK.CONE_DEG);
       if (!hot) {
         if (p.aimId !== null) p.client.send({ type: "event", kind: "lock_lost", data: {} });
         p.aimId = null;
@@ -792,6 +814,22 @@ export class Room {
         }
         if (t >= (pr.fuseAt ?? t)) this.explode(pr, pr.x, pr.z, t);
         continue;
+      }
+      // Guided: steer toward the locked target at a bounded turn rate, so it
+      // chases a moving player but cannot pivot on the spot.
+      if (pr.lockedTargetId) {
+        const tgt = this.players.get(pr.lockedTargetId) ?? this.objects.get(pr.lockedTargetId);
+        const gone = !tgt || ("alive" in tgt && !tgt.alive) || ("hp" in tgt && tgt.hp <= 0);
+        if (gone) {
+          pr.lockedTargetId = undefined;
+        } else {
+          const want = bearingLocal(pr, tgt);
+          const turn = GAME.ROCKET_LOCK.TURN_DPS * dt;
+          const diff = ((want - pr.heading + 540) % 360) - 180;
+          pr.heading = (pr.heading + Math.max(-turn, Math.min(turn, diff)) + 360) % 360;
+          // Keep flying while the target is still ahead of it.
+          pr.maxDist = Math.max(pr.travelled + distLocal(pr, tgt), pr.maxDist);
+        }
       }
       const to = rayEnd(from, pr.heading, step);
       // barrier on the way → explode there
@@ -939,6 +977,9 @@ export class Room {
       d.cx = v.x;
       d.cz = v.z;
       d.phase = 0;
+      d.ammo = GAME.DRONE.MAG;
+      d.reloadingUntil = 0;
+      d.returning = false;
       d.y = GAME.DRONE.ALT_M;
       d.expiresAt = this.now() + GAME.DRONE.TTL_MS;
     }
@@ -1141,17 +1182,63 @@ export class Room {
           bestD = dist;
         }
       }
+      // Out of ammo: fly home, sit on the anchor, reload, resume.
+      if (d.ammo <= 0 && !d.returning && d.reloadingUntil === 0) {
+        d.returning = true;
+        this.broadcast({ type: "event", kind: "drone_returning", data: { id: d.id } });
+      }
+      if (d.returning) {
+        const home = { x: d.cx, z: d.cz };
+        const gap = distLocal(d, home);
+        const step = D.RETURN_MPS * dt;
+        if (gap > step) {
+          const k = step / gap;
+          d.x += (home.x - d.x) * k;
+          d.z += (home.z - d.z) * k;
+          d.heading = bearingLocal(d, home);
+          continue;
+        }
+        d.x = home.x;
+        d.z = home.z;
+        // Zero means "arrived but not started"; anything else is the deadline.
+        // Testing `<= t` here instead would restart the clock on the very tick
+        // the reload was due and the drone would never come back.
+        if (d.reloadingUntil === 0) {
+          d.reloadingUntil = t + D.RELOAD_MS;
+          continue;
+        }
+        if (t < d.reloadingUntil) continue;
+        d.ammo = D.MAG;
+        d.returning = false;
+        d.reloadingUntil = 0;
+        this.broadcast({ type: "event", kind: "drone_rearmed", data: { id: d.id } });
+      }
+
       d.phase += (D.SPEED_MPS / D.ORBIT_M) * dt;
-      const c = target ? { x: target.x, z: target.z } : { x: d.cx, z: d.cz };
-      const r = target ? D.ORBIT_M * 0.5 : D.ORBIT_M;
+      // With no player in reach it goes to work on enemy cover instead of idling.
+      const obstacle = target
+        ? null
+        : [...this.objects.values()]
+            .filter((o) => o.kind === "barrier" && o.hp > 0 && o.team !== null && o.team !== d.team && distLocal({ x: d.cx, z: d.cz }, o) <= D.RANGE_M)
+            .sort((a, b) => distLocal({ x: d.cx, z: d.cz }, a) - distLocal({ x: d.cx, z: d.cz }, b))[0] ?? null;
+      const focus = target ?? obstacle;
+      const c = focus ? { x: focus.x, z: focus.z } : { x: d.cx, z: d.cz };
+      const r = focus ? D.ORBIT_M * 0.5 : D.ORBIT_M;
       d.x = c.x + Math.cos(d.phase) * r;
       d.z = c.z + Math.sin(d.phase) * r;
-      d.heading = target ? bearingLocal(d, target) : (d.phase * 180) / Math.PI + 90;
-      if (target && t - d.lastShotAt >= D.COOLDOWN_MS && !this.barrierBetween(d, target) && !(d.disabledUntil && d.disabledUntil > t)) {
+      d.heading = focus ? bearingLocal(d, focus) : (d.phase * 180) / Math.PI + 90;
+      const canFire = d.ammo > 0 && t - d.lastShotAt >= D.COOLDOWN_MS && !(d.disabledUntil && d.disabledUntil > t);
+      if (target && canFire && !this.barrierBetween(d, target)) {
         d.lastShotAt = t;
+        d.ammo -= 1;
         this.broadcast({ type: "shot", weapon: "drone", shooterId: d.id, x: d.x, z: d.z, heading: d.heading, targetId: target.id, targetKind: "player", damage: D.DAMAGE });
         const owner = d.ownerId ? this.players.get(d.ownerId) ?? null : null;
         this.damagePlayer(target, D.DAMAGE, owner, "drone");
+      } else if (obstacle && canFire) {
+        d.lastShotAt = t;
+        d.ammo -= 1;
+        this.broadcast({ type: "shot", weapon: "drone", shooterId: d.id, x: d.x, z: d.z, heading: d.heading, targetId: obstacle.id, targetKind: "object", damage: D.OBSTACLE_DAMAGE });
+        this.damageObject(obstacle, D.OBSTACLE_DAMAGE);
       }
     }
   }

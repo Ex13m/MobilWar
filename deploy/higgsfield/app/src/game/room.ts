@@ -26,6 +26,7 @@ import {
   type WeaponDef,
   type WeaponId,
   type Projectile,
+  type GrenadeKind,
   type PickupKind,
   type BaseInfo,
   type AvatarId,
@@ -59,6 +60,20 @@ export interface Player extends PlayerPublic {
   infected?: boolean;
   /** Per-weapon last shot time. */
   lastShotByWeapon: Record<WeaponId, number>;
+  /**
+   * Recent positions, newest last. Shots are resolved against where a target
+   * was on the shooter's screen, not where they are now, so this has to go back
+   * at least as far as the client's interpolation delay.
+   */
+  history: Array<{ t: number; x: number; z: number }>;
+  /** Target the player has been holding their aim on, and since when. */
+  aimId: string | null;
+  aimSince: number;
+  /** Server time of the last throw, for the grenade cooldown. */
+  lastGrenadeAt: number;
+  /** Shields stay down until this server time after an EMP. */
+  empUntil: number;
+  grenades: Record<GrenadeKind, number>;
   /** Server time when rifle bloom was last updated. */
   bloomAt: number;
   /** Overheat seconds accumulated (rifle "overheat" trait) and lock time. */
@@ -81,6 +96,11 @@ interface Drone extends WorldObject {
   cx: number;
   cz: number;
   phase: number;
+  /** Shots left before it has to go home. */
+  ammo: number;
+  /** Set while it is flying back or sitting on its anchor; it holds fire. */
+  reloadingUntil: number;
+  returning: boolean;
 }
 
 interface ServerProjectile extends Projectile {
@@ -89,6 +109,38 @@ interface ServerProjectile extends Projectile {
   /** Where the projectile will self-detonate (aimed distance). */
   maxDist: number;
   travelled: number;
+  /** A guided rocket steers toward this target for as long as it exists. */
+  lockedTargetId?: string;
+  /** Grenades: where the throw started, so the arc is a function of time, not of tick size. */
+  x0?: number;
+  z0?: number;
+  /** Grenades: how long the throw itself takes, ms. */
+  flightMs?: number;
+}
+
+/** Full set of throwables, handed out on spawn and on respawn. */
+function fullGrenades(): Record<GrenadeKind, number> {
+  return { plasma: GAME.GRENADE.TYPES.plasma.perLife, emp: GAME.GRENADE.TYPES.emp.perLife };
+}
+
+/**
+ * Turns a grenade type into the projectile definition `explode()` already
+ * understands, so throwables reuse the rocket splash path instead of a second
+ * damage model.
+ */
+function grenadeDef(kind: GrenadeKind): WeaponDef {
+  const G = GAME.GRENADE.TYPES[kind];
+  const base = weaponById("rocket_01") ?? ({} as WeaponDef);
+  return {
+    ...base,
+    id: `grenade_${kind}`,
+    name: kind === "emp" ? "ЭМИ-граната" : "Плазменная граната",
+    damage: G.damage,
+    damageEdge: G.damageEdge,
+    splashM: G.splashM,
+    trait: kind === "emp" ? "emp" : "none",
+    color: G.color,
+  };
 }
 
 type KillWeapon = WeaponId | "turret" | "drone";
@@ -120,6 +172,20 @@ export class Room {
   hill: { x: number; z: number; r: number } | null = null;
   private kothLastTick = 0;
   projectiles = new Map<string, ServerProjectile>();
+  /**
+   * Rounds that have left the muzzle but not yet arrived. Hitscan resolution
+   * still happens at the trigger pull (that is what keeps aiming fair under GPS
+   * noise), but the damage lands after the round's flight time, so a fast mover
+   * can be killed where they were and a slow round can be outrun by a respawn.
+   */
+  private pendingHits: Array<{
+    at: number;
+    shooterId: string;
+    targetId: string;
+    damage: number;
+    weapon: WeaponId;
+    defId: string;
+  }> = [];
   private lastPickupSpawn = 0;
   private lastTickAt = 0;
   private rng = mulberry32(Date.now() & 0xffffffff);
@@ -215,6 +281,12 @@ export class Room {
       overchargeUntil: 0,
       protectedUntil: 0,
       lastShotByWeapon: { pistol: 0, blaster: 0, sniper: 0, rocket: 0 },
+      history: [],
+      aimId: null,
+      aimSince: 0,
+      lastGrenadeAt: 0,
+      empUntil: 0,
+      grenades: fullGrenades(),
       loadout: sanitizeLoadout(opts.loadout),
       mag: fullMags(),
       reserve: fullReserve(),
@@ -230,6 +302,7 @@ export class Room {
       burnAcc: 0,
     };
     p.mag = fullMags(p.loadout);
+    p.grenades = fullGrenades();
     p.reserve = fullReserve(p.loadout);
     this.players.set(p.id, p);
     this.lastActiveAt = this.now();
@@ -268,6 +341,9 @@ export class Room {
     const v = toLocal(this.origin, sample);
     p.x = v.x;
     p.z = v.z;
+    p.history.push({ t, x: v.x, z: v.z });
+    // Two seconds is comfortably more than the rewind window and costs nothing.
+    while (p.history.length > 2 && p.history[0]!.t < t - 2000) p.history.shift();
     p.acc = acc;
     p.heading = ((heading % 360) + 360) % 360;
     p.t = t;
@@ -404,9 +480,15 @@ export class Room {
     const charged = W.trait === "charge" && charge >= W.chargeMs;
     const enemies = [...this.players.values()].filter((q) => q.id !== p.id && q.alive && !q.isReferee && this.isEnemy(p, q) && q.lastSample && q.protectedUntil <= t);
     const allies = W.trait === "heal" ? [...this.players.values()].filter((q) => q.id !== p.id && q.alive && !q.isReferee && !this.isEnemy(p, q) && q.lastSample && q.hp < GAME.MAX_HP) : [];
+    // Rewind the world to what the shooter's screen was showing.
+    const rewindTo = t - Math.min(GAME.MAX_REWIND_MS, GAME.INTERP_DELAY_MS);
+    const at = (q: Player) => {
+      const v = this.positionAt(q, rewindTo);
+      return { id: q.id, x: v.x, z: v.z, acc: q.acc };
+    };
     const targets = [
-      ...enemies.map((q) => ({ id: q.id, x: q.x, z: q.z, acc: q.acc })),
-      ...allies.map((q) => ({ id: q.id, x: q.x, z: q.z, acc: q.acc })),
+      ...enemies.map(at),
+      ...allies.map(at),
       ...[...this.objects.values()]
         .filter((o) => o.hp > 0 && o.team !== null && o.team !== p.team && (o.kind === "turret" || o.kind === "drone"))
         .map((o) => ({ id: o.id, x: o.x, z: o.z, acc: 0 })),
@@ -424,7 +506,8 @@ export class Room {
       if (!hit) continue;
       const tgt = this.players.get(hit.id) ?? this.objects.get(hit.id);
       if (!tgt) continue;
-      const barrier = this.barrierBetween(p, tgt);
+      // A rail slug goes through cover; everything else is stopped by it.
+      const barrier = W.piercesCover ? null : this.barrierBetween(p, tgt);
       if (barrier) {
         if (!firstDone) evt.blockedBy = barrier.id;
         this.damageObject(barrier, Math.round(W.damage / 2));
@@ -451,8 +534,13 @@ export class Room {
         evt.damage = dmg;
         firstDone = true;
       } else extra.push({ targetId: hit.id, damage: dmg });
-      if (victim) this.applyHit(p, victim, dmg, weapon, W, t);
-      else {
+      // Flight time. Anything slower than a rail slug arrives late.
+      const flightMs = (hit.dist / Math.max(1, W.speedMps)) * 1000;
+      if (flightMs >= 30) {
+        this.pendingHits.push({ at: t + flightMs, shooterId: p.id, targetId: hit.id, damage: dmg, weapon, defId: W.id });
+      } else if (victim) {
+        this.applyHit(p, victim, dmg, weapon, W, t);
+      } else {
         const obj = this.objects.get(hit.id);
         if (obj) this.damageObject(obj, dmg);
       }
@@ -470,7 +558,7 @@ export class Room {
 
   /** Apply a hit with the weapon's trait side effects. */
   private applyHit(p: Player, victim: Player, dmg: number, weapon: KillWeapon, W: WeaponDef, t: number): void {
-    const pierce = W.trait === "pierce";
+    const pierce = W.piercesShield;
     this.damagePlayer(victim, dmg, p, weapon, pierce);
     if (W.burnS > 0) {
       victim.burnUntil = Math.max(victim.burnUntil, t + W.burnS * 1000);
@@ -514,7 +602,14 @@ export class Room {
     const targets = [...this.players.values()]
       .filter((q) => q.id !== p.id && q.alive && !q.isReferee && (heal ? !this.isEnemy(p, q) : this.isEnemy(p, q)) && q.lastSample)
       .map((q) => ({ id: q.id, x: q.x, z: q.z, acc: q.acc }));
-    const aimed = resolveShot({ x: p.x, z: p.z, acc: p.acc }, p.heading, targets, W.rangeM, W.cone, { pitch: aimPitch });
+    // A completed lock wins over the cone search: that is what "guided" means.
+    const locked = p.aimId && this.now() - p.aimSince >= GAME.ROCKET_LOCK.MS ? p.aimId : null;
+    const aimed = locked
+      ? (() => {
+          const q = this.players.get(locked) ?? this.objects.get(locked);
+          return q ? { id: locked, dist: distLocal(p, q), angErr: 0, allowed: 0, score: 1 } : null;
+        })()
+      : resolveShot({ x: p.x, z: p.z, acc: p.acc }, p.heading, targets, W.rangeM, W.cone, { pitch: aimPitch });
     const proj: ServerProjectile = {
       id: uid("rk"),
       kind: "rocket",
@@ -526,12 +621,161 @@ export class Room {
       heading: p.heading,
       t0: t,
       lastT: t,
+      lockedTargetId: locked ?? undefined,
       maxDist: aimed ? Math.min(W.rangeM, aimed.dist) : W.rangeM,
       travelled: 0,
       def: W,
     };
     this.projectiles.set(proj.id, proj);
     this.broadcast({ type: "shot", weapon: "rocket", weaponId: W.id, shooterId: p.id, x: p.x, z: p.z, heading: p.heading, pitch: aimPitch });
+  }
+
+  /**
+   * Throw a grenade. Range comes from the aim pitch (docs/TZ.md): level throws
+   * to MIN_RANGE_M, fully tilted up to MAX_RANGE_M. The fuse starts on release,
+   * so a grenade cannot be cooked.
+   */
+  throwGrenade(p: Player, kind: GrenadeKind, heading: number, pitch: number): void {
+    const t = this.now();
+    if (this.phase !== "playing" || !p.alive || p.isReferee) return;
+    if (p.outOfBoundsSince || !p.lastSample) return;
+    if (p.stunnedUntil > t) return;
+    if (kind !== "plasma" && kind !== "emp") return;
+    if ((p.grenades[kind] ?? 0) <= 0) return;
+    if (t - p.lastGrenadeAt < GAME.GRENADE.COOLDOWN_MS) return;
+
+    const G = GAME.GRENADE;
+    const h = Number.isFinite(heading) ? heading : p.heading;
+    p.heading = ((h % 360) + 360) % 360;
+    const aim = Number.isFinite(pitch) ? Math.max(0, Math.min(G.MAX_PITCH_DEG, pitch)) : G.MIN_PITCH_DEG;
+    const k = Math.max(0, (aim - G.MIN_PITCH_DEG) / (G.MAX_PITCH_DEG - G.MIN_PITCH_DEG));
+    const range = G.MIN_RANGE_M + k * (G.MAX_RANGE_M - G.MIN_RANGE_M) + G.ROLL_M;
+
+    p.grenades[kind] -= 1;
+    p.lastGrenadeAt = t;
+    const def = grenadeDef(kind);
+    const proj: ServerProjectile = {
+      id: uid("gr"),
+      kind: "grenade",
+      grenade: kind,
+      ownerId: p.id,
+      team: p.team,
+      x: p.x,
+      z: p.z,
+      y: 1.4,
+      heading: p.heading,
+      t0: t,
+      fuseAt: t + G.FUSE_MS,
+      lastT: t,
+      x0: p.x,
+      z0: p.z,
+      // The throw lands well before the fuse, then it sits there until the blast.
+      flightMs: G.FUSE_MS / 2,
+      maxDist: range,
+      travelled: 0,
+      def,
+    };
+    this.projectiles.set(proj.id, proj);
+    this.broadcast({ type: "event", kind: "grenade", data: { id: proj.id, kind, by: p.id, x: p.x, z: p.z, heading: p.heading, range, fuseMs: G.FUSE_MS } });
+  }
+
+  /** Land the rounds whose flight time has elapsed. */
+  private tickPendingHits(t: number): void {
+    if (!this.pendingHits.length) return;
+    const still: typeof this.pendingHits = [];
+    for (const h of this.pendingHits) {
+      if (h.at > t) {
+        still.push(h);
+        continue;
+      }
+      const shooter = this.players.get(h.shooterId);
+      const W = weaponById(h.defId);
+      if (!W) continue;
+      const victim = this.players.get(h.targetId);
+      if (victim) {
+        // The round arrives regardless of who is watching, but a target that
+        // already died (or respawned under protection) is not hit twice.
+        if (!victim.alive || victim.protectedUntil > t) continue;
+        if (shooter) this.applyHit(shooter, victim, h.damage, h.weapon, W, t);
+        else this.damagePlayer(victim, h.damage, null, h.weapon, W.piercesShield);
+        continue;
+      }
+      const obj = this.objects.get(h.targetId);
+      if (obj && obj.hp > 0) this.damageObject(obj, h.damage);
+    }
+    this.pendingHits = still;
+  }
+
+  /**
+   * Where a player was at server time `at`, interpolated from their history the
+   * same way the client interpolates them for rendering. Falls back to the live
+   * position when the history does not reach that far.
+   */
+  private positionAt(p: Player, at: number): { x: number; z: number } {
+    const h = p.history;
+    if (h.length === 0) return { x: p.x, z: p.z };
+    if (at >= h[h.length - 1]!.t) return { x: p.x, z: p.z };
+    if (at <= h[0]!.t) return { x: h[0]!.x, z: h[0]!.z };
+    let i = h.length - 1;
+    while (i > 0 && h[i - 1]!.t > at) i--;
+    const a = h[i - 1] ?? h[0]!;
+    const b = h[i]!;
+    const span = Math.max(1, b.t - a.t);
+    const k = Math.min(1, Math.max(0, (at - a.t) / span));
+    return { x: a.x + (b.x - a.x) * k, z: a.z + (b.z - a.z) * k };
+  }
+
+  /**
+   * Track who each player is holding their aim on. Holding steady on one target
+   * is the only thing in a GPS shooter that reads as skill, so it breaks ties
+   * in target selection and drives the lock-on cue in the HUD.
+   */
+  private tickAim(t: number): void {
+    for (const p of this.players.values()) {
+      if (!p.alive || p.isReferee || !p.lastSample) {
+        p.aimId = null;
+        continue;
+      }
+      const W = this.def(p, p.weapon);
+      const rewindTo = t - Math.min(GAME.MAX_REWIND_MS, GAME.INTERP_DELAY_MS);
+      const targets = [
+        ...[...this.players.values()]
+          .filter((q) => q.id !== p.id && q.alive && !q.isReferee && this.isEnemy(p, q) && q.lastSample)
+          .map((q) => {
+            const v = this.positionAt(q, rewindTo);
+            return { id: q.id, x: v.x, z: v.z, acc: q.acc };
+          }),
+        // Cover, turrets and drones are lockable too: the heavy slot exists to
+        // clear them, and a guided rocket needs something to be guided at.
+        ...[...this.objects.values()]
+          .filter((o) => o.hp > 0 && o.team !== null && o.team !== p.team && (o.kind === "barrier" || o.kind === "turret" || o.kind === "drone"))
+          .map((o) => ({ id: o.id, x: o.x, z: o.z, acc: 0 })),
+      ];
+      // A tighter cone than the shot uses: this is "on target", not "would hit".
+      const hot = resolveShot({ x: p.x, z: p.z, acc: p.acc }, p.heading, targets, W.rangeM, GAME.ROCKET_LOCK.CONE_DEG);
+      if (!hot) {
+        if (p.aimId !== null) p.client.send({ type: "event", kind: "lock_lost", data: {} });
+        p.aimId = null;
+        continue;
+      }
+      if (p.aimId !== hot.id) {
+        p.aimId = hot.id;
+        p.aimSince = t;
+      } else if (t - p.aimSince >= 500 && t - p.aimSince < 500 + 1000 / GAME.TICK_HZ) {
+        // Crossed half a second on the same target: tell the client once.
+        p.client.send({ type: "event", kind: "lock_on", data: { id: hot.id } });
+      }
+    }
+  }
+
+  /** Test seam: the rewound position used for hit resolution. */
+  positionAtForTest(p: Player, at: number): { x: number; z: number } {
+    return this.positionAt(p, at);
+  }
+
+  /** Test seam: the room's clock. */
+  nowForTest(): number {
+    return this.now();
   }
 
   private tickProjectiles(t: number): void {
@@ -542,6 +786,51 @@ export class Room {
       pr.lastT = t;
       const step = R.SPEED_MPS * dt;
       const from = { x: pr.x, z: pr.z };
+      if (pr.kind === "grenade") {
+        // Timed, not proximity: it flies to the landing point, stops there and
+        // waits out the fuse, so enemies get the chance to back away.
+        //
+        // The position is derived from elapsed time rather than accumulated per
+        // tick: a long tick (a stalled server, a test that jumps the clock) must
+        // not leave the grenade short of where the throw was aimed.
+        const flight = Math.max(1, pr.flightMs ?? 1);
+        const k = Math.max(0, Math.min(1, (t - pr.t0) / flight));
+        const land = rayEnd({ x: pr.x0 ?? pr.x, z: pr.z0 ?? pr.z }, pr.heading, pr.maxDist * k);
+        // A grenade is lobbed, so a barrier stops it where it strikes rather
+        // than letting it pass, but it still waits out its fuse there.
+        const wall = firstBarrierOnPath(from, land, this.barriers(), GAME.BARRIER_BLOCK_M);
+        if (wall) {
+          pr.x = wall.x;
+          pr.z = wall.z;
+          pr.travelled = pr.maxDist;
+          pr.flightMs = 1; // it has arrived; stop advancing it
+          pr.x0 = wall.x;
+          pr.z0 = wall.z;
+          pr.maxDist = 0;
+        } else {
+          pr.x = land.x;
+          pr.z = land.z;
+          pr.travelled = pr.maxDist * k;
+        }
+        if (t >= (pr.fuseAt ?? t)) this.explode(pr, pr.x, pr.z, t);
+        continue;
+      }
+      // Guided: steer toward the locked target at a bounded turn rate, so it
+      // chases a moving player but cannot pivot on the spot.
+      if (pr.lockedTargetId) {
+        const tgt = this.players.get(pr.lockedTargetId) ?? this.objects.get(pr.lockedTargetId);
+        const gone = !tgt || ("alive" in tgt && !tgt.alive) || ("hp" in tgt && tgt.hp <= 0);
+        if (gone) {
+          pr.lockedTargetId = undefined;
+        } else {
+          const want = bearingLocal(pr, tgt);
+          const turn = GAME.ROCKET_LOCK.TURN_DPS * dt;
+          const diff = ((want - pr.heading + 540) % 360) - 180;
+          pr.heading = (pr.heading + Math.max(-turn, Math.min(turn, diff)) + 360) % 360;
+          // Keep flying while the target is still ahead of it.
+          pr.maxDist = Math.max(pr.travelled + distLocal(pr, tgt), pr.maxDist);
+        }
+      }
       const to = rayEnd(from, pr.heading, step);
       // barrier on the way → explode there
       const barrier = firstBarrierOnPath(from, to, this.barriers(), GAME.BARRIER_BLOCK_M);
@@ -595,6 +884,12 @@ export class Room {
       }
       if (q.protectedUntil > t) continue;
       if (q.team === pr.team && q.id !== pr.ownerId) continue; // no team damage; self-damage allowed
+      // An EMP does no damage, so the shield strip has to happen outside the
+      // damage branch or a zero-damage blast would leave shields untouched.
+      if (W.trait === "emp" && d <= W.splashM) {
+        q.shield = 0;
+        q.empUntil = Math.max(q.empUntil, t + GAME.GRENADE.TYPES.emp.disableMs);
+      }
       const dmg = splashDamage(d, W.splashM, q.id === pr.ownerId ? Math.round(W.damage / 2) : W.damage, W.damageEdge);
       if (dmg > 0) {
         victims.push({ id: q.id, damage: dmg });
@@ -614,6 +909,26 @@ export class Room {
         this.damageObject(o, dmg);
       }
       if (W.trait === "emp" && d <= W.splashM && this.objects.has(o.id)) o.disabledUntil = t + 6000;
+    }
+    // Fragments: past the blast core, a thinner ring of damage that ignores the
+    // falloff curve. This is what turns a grenade into area denial instead of a
+    // point strike.
+    const frag = pr.grenade ? GAME.GRENADE.TYPES[pr.grenade] : null;
+    if (frag && frag.fragments > 0 && !sub) {
+      const fragR = W.splashM * GAME.GRENADE.FRAG_RANGE_MUL;
+      for (const q of this.players.values()) {
+        if (!q.alive || q.isReferee || !q.lastSample) continue;
+        if (q.protectedUntil > t) continue;
+        if (q.team === pr.team && q.id !== pr.ownerId) continue;
+        const d = distLocal({ x, z }, q);
+        if (d <= W.splashM || d > fragR) continue; // the core already hit them
+        if (victims.some((v) => v.id === q.id)) continue;
+        const dmg = q.id === pr.ownerId ? Math.round(frag.fragDamage / 2) : frag.fragDamage;
+        victims.push({ id: q.id, damage: dmg });
+        if (owner) this.applyHit(owner, q, dmg, "rocket", W, t);
+        else this.damagePlayer(q, dmg, null, "rocket", false);
+      }
+      this.broadcast({ type: "event", kind: "shrapnel", data: { x, z, r: fragR, n: frag.fragments, by: pr.ownerId } });
     }
     if (W.trait === "emp") this.broadcast({ type: "event", kind: "emp", data: { x, z, r: W.splashM } });
     this.broadcast({ type: "event", kind: "explosion", data: { x, z, r: W.splashM, by: pr.ownerId, victims, weaponId: W.id, heal } });
@@ -662,6 +977,9 @@ export class Room {
       d.cx = v.x;
       d.cz = v.z;
       d.phase = 0;
+      d.ammo = GAME.DRONE.MAG;
+      d.reloadingUntil = 0;
+      d.returning = false;
       d.y = GAME.DRONE.ALT_M;
       d.expiresAt = this.now() + GAME.DRONE.TTL_MS;
     }
@@ -721,6 +1039,7 @@ export class Room {
 
   private resetLoadout(p: Player): void {
     p.mag = fullMags(p.loadout);
+    p.grenades = fullGrenades();
     p.reserve = fullReserve(p.loadout);
     p.ammo = p.mag.rocket;
     p.reloadUntil = 0;
@@ -792,6 +1111,8 @@ export class Room {
     for (const p of this.players.values()) this.settleReload(p, t);
     this.tickBurn(t);
     this.tickRespawns(t);
+    this.tickAim(t);
+    this.tickPendingHits(t);
     this.tickProjectiles(t);
     this.tickTurrets(t);
     this.tickDrones(t);
@@ -861,17 +1182,63 @@ export class Room {
           bestD = dist;
         }
       }
+      // Out of ammo: fly home, sit on the anchor, reload, resume.
+      if (d.ammo <= 0 && !d.returning && d.reloadingUntil === 0) {
+        d.returning = true;
+        this.broadcast({ type: "event", kind: "drone_returning", data: { id: d.id } });
+      }
+      if (d.returning) {
+        const home = { x: d.cx, z: d.cz };
+        const gap = distLocal(d, home);
+        const step = D.RETURN_MPS * dt;
+        if (gap > step) {
+          const k = step / gap;
+          d.x += (home.x - d.x) * k;
+          d.z += (home.z - d.z) * k;
+          d.heading = bearingLocal(d, home);
+          continue;
+        }
+        d.x = home.x;
+        d.z = home.z;
+        // Zero means "arrived but not started"; anything else is the deadline.
+        // Testing `<= t` here instead would restart the clock on the very tick
+        // the reload was due and the drone would never come back.
+        if (d.reloadingUntil === 0) {
+          d.reloadingUntil = t + D.RELOAD_MS;
+          continue;
+        }
+        if (t < d.reloadingUntil) continue;
+        d.ammo = D.MAG;
+        d.returning = false;
+        d.reloadingUntil = 0;
+        this.broadcast({ type: "event", kind: "drone_rearmed", data: { id: d.id } });
+      }
+
       d.phase += (D.SPEED_MPS / D.ORBIT_M) * dt;
-      const c = target ? { x: target.x, z: target.z } : { x: d.cx, z: d.cz };
-      const r = target ? D.ORBIT_M * 0.5 : D.ORBIT_M;
+      // With no player in reach it goes to work on enemy cover instead of idling.
+      const obstacle = target
+        ? null
+        : [...this.objects.values()]
+            .filter((o) => o.kind === "barrier" && o.hp > 0 && o.team !== null && o.team !== d.team && distLocal({ x: d.cx, z: d.cz }, o) <= D.RANGE_M)
+            .sort((a, b) => distLocal({ x: d.cx, z: d.cz }, a) - distLocal({ x: d.cx, z: d.cz }, b))[0] ?? null;
+      const focus = target ?? obstacle;
+      const c = focus ? { x: focus.x, z: focus.z } : { x: d.cx, z: d.cz };
+      const r = focus ? D.ORBIT_M * 0.5 : D.ORBIT_M;
       d.x = c.x + Math.cos(d.phase) * r;
       d.z = c.z + Math.sin(d.phase) * r;
-      d.heading = target ? bearingLocal(d, target) : (d.phase * 180) / Math.PI + 90;
-      if (target && t - d.lastShotAt >= D.COOLDOWN_MS && !this.barrierBetween(d, target) && !(d.disabledUntil && d.disabledUntil > t)) {
+      d.heading = focus ? bearingLocal(d, focus) : (d.phase * 180) / Math.PI + 90;
+      const canFire = d.ammo > 0 && t - d.lastShotAt >= D.COOLDOWN_MS && !(d.disabledUntil && d.disabledUntil > t);
+      if (target && canFire && !this.barrierBetween(d, target)) {
         d.lastShotAt = t;
+        d.ammo -= 1;
         this.broadcast({ type: "shot", weapon: "drone", shooterId: d.id, x: d.x, z: d.z, heading: d.heading, targetId: target.id, targetKind: "player", damage: D.DAMAGE });
         const owner = d.ownerId ? this.players.get(d.ownerId) ?? null : null;
         this.damagePlayer(target, D.DAMAGE, owner, "drone");
+      } else if (obstacle && canFire) {
+        d.lastShotAt = t;
+        d.ammo -= 1;
+        this.broadcast({ type: "shot", weapon: "drone", shooterId: d.id, x: d.x, z: d.z, heading: d.heading, targetId: obstacle.id, targetKind: "object", damage: D.OBSTACLE_DAMAGE });
+        this.damageObject(obstacle, D.OBSTACLE_DAMAGE);
       }
     }
   }
@@ -918,6 +1285,8 @@ export class Room {
         return true;
       }
       case "shield":
+        // An EMP keeps the emitter down, so picking up a shield mid-jam is a waste.
+        if (p.empUntil > t) return false;
         if (p.shield >= GAME.SHIELD_MAX) return false;
         p.shield = GAME.SHIELD_MAX;
         return true;
@@ -1162,6 +1531,7 @@ export function publicView(p: Player): PlayerPublic {
     ammo: p.mag.rocket,
     weapon: p.weapon,
     mag: { ...p.mag },
+    grenades: { ...p.grenades },
     reserve: { ...p.reserve },
     reloadUntil: p.reloadUntil,
     bloom: Math.round(p.bloom * 10) / 10,

@@ -91,6 +91,23 @@ export const GAME = {
     TTL_MS: 120000,
     COST: 2,
     MAX_PER_TEAM: 2,
+    /** Shots before it has to go home. */
+    MAG: 12,
+    /** Time spent sitting on its anchor reloading, ms. */
+    RELOAD_MS: 6000,
+    /** Speed on the way home; it does not loiter while empty. */
+    RETURN_MPS: 7,
+    /** Damage dealt to an obstacle per shot (it chews cover slowly). */
+    OBSTACLE_DAMAGE: 12,
+  },
+  /** Guided rocket: hold to lock, release to fire. */
+  ROCKET_LOCK: {
+    /** Holding the aim this long on a target completes the lock, ms. */
+    MS: 700,
+    /** Half-angle the target must stay inside while locking, deg. */
+    CONE_DEG: 12,
+    /** A locked rocket steers this hard toward its target, deg per second. */
+    TURN_DPS: 90,
   },
   /** Round length, ms. */
   ROUND_MS: 8 * 60 * 1000,
