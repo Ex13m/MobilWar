@@ -207,6 +207,12 @@ export class Room extends DurableObject<Env> {
         if (p) game.shoot(p, Number(msg.heading), msg.weapon, { chargeMs: Number(msg.chargeMs) || 0, zoomed: !!msg.zoomed, pitch: Number(msg.pitch) });
         return;
       }
+      case "grenade": {
+        if (!conn.shootBucket.take()) return;
+        const p = game.players.get(conn.id);
+        if (p) game.throwGrenade(p, msg.kind, Number(msg.heading), Number(msg.pitch));
+        return;
+      }
       case "reload": {
         const p = game.players.get(conn.id);
         if (p) game.reload(p);
