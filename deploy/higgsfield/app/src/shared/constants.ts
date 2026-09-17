@@ -181,6 +181,14 @@ export const GAME = {
   MAX_PLAYERS_PER_ROOM: 16,
   /** Default room geofence radius (m). */
   DEFAULT_ZONE_RADIUS_M: 150,
+  /**
+   * The round starts by itself once this many players are in the room, after a
+   * short countdown. A referee is optional: a pick-up game on a lawn has nobody
+   * to run it.
+   */
+  AUTOSTART_PLAYERS: 2,
+  /** Grace period before the automatic countdown begins, ms. */
+  AUTOSTART_DELAY_MS: 5000,
   /** Client interpolation buffer (ms). */
   INTERP_DELAY_MS: 250,
 } as const;

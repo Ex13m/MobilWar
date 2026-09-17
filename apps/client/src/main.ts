@@ -18,7 +18,7 @@ async function boot(): Promise<void> {
   }
   // Installed PWAs keep serving their cached bundle, so every launch checks for
   // a newer build first; if one exists this reloads and never comes back.
-  root.innerHTML = `<div class="screen"><div class="card"><h2>MobilWar</h2><p class="sub">Проверяю обновления…</p></div></div>`;
+  root.innerHTML = `<div class="screen hero art-lobby"><div class="card"><h2>MobilWar</h2><p class="sub">Проверяю обновления…</p></div></div>`;
   const { reloading } = await checkForUpdate();
   if (reloading) return;
 
@@ -52,7 +52,7 @@ async function boot(): Promise<void> {
 
 function permissionGate(): Promise<void> {
   return new Promise((resolve) => {
-    root.innerHTML = `<div class="screen"><div class="card">
+    root.innerHTML = `<div class="screen hero art-start"><div class="card">
       <h2>Разрешения</h2>
       <p class="sub">Нужны GPS (позиция), компас (прицел), камера (AR) и звук (радар). Нажми кнопку и разреши всё.</p>
       <button class="btn block" id="go">Разрешить и играть</button>

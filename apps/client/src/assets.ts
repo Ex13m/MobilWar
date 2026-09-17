@@ -39,6 +39,17 @@ export const SPRITES = {
 } as const;
 export type SpriteId = keyof typeof SPRITES;
 
+/**
+ * Hero key art. Loaded by CSS on the screen that needs it, so none of it costs
+ * anything until that screen is shown.
+ */
+export const ART = {
+  lobby: "/assets/art/lobby.webp",
+  start: "/assets/art/start.webp",
+  victory: "/assets/art/victory.webp",
+  down: "/assets/art/down.webp",
+} as const;
+
 export const SFX = {
   laser1: "/assets/sfx/laser1.ogg",
   laser4: "/assets/sfx/laser4.ogg",

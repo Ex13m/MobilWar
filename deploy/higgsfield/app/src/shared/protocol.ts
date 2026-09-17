@@ -325,6 +325,8 @@ export interface EventMsg {
     | "lock_lost"
     | "drone_returning"
     | "drone_rearmed"
+    | "autostart"
+    | "autostart_cancelled"
     | "pickup"
     | "pickup_spawned"
     | "respawn"

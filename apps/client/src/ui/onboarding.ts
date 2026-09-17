@@ -62,7 +62,7 @@ export function showOnboarding(root: HTMLElement, profile: Profile): Promise<voi
   return new Promise((resolve) => {
     let i = 0;
     const el = document.createElement("div");
-    el.className = "screen onboarding";
+    el.className = "screen onboarding hero art-lobby";
     root.innerHTML = "";
     root.appendChild(el);
 

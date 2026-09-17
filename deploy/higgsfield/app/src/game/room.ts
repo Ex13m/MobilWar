@@ -172,6 +172,8 @@ export class Room {
   hill: { x: number; z: number; r: number } | null = null;
   private kothLastTick = 0;
   projectiles = new Map<string, ServerProjectile>();
+  /** Server time the automatic start fires at, or 0 when no countdown is armed. */
+  private autostartAt = 0;
   /**
    * Rounds that have left the muzzle but not yet arrived. Hitscan resolution
    * still happens at the trigger pull (that is what keeps aiming fair under GPS
@@ -1097,6 +1099,24 @@ export class Room {
   /** Advance the room by one tick. Returns true if a snapshot should be broadcast. */
   tick(): void {
     const t = this.now();
+    // Nobody has to run the game. Once enough players are in the lobby and have
+    // a position fix, the round counts itself down and starts.
+    if (this.phase === "lobby") {
+      const ready = [...this.players.values()].filter((p) => !p.isReferee && p.lastSample).length;
+      if (ready >= GAME.AUTOSTART_PLAYERS) {
+        if (!this.autostartAt) {
+          this.autostartAt = t + GAME.AUTOSTART_DELAY_MS;
+          this.broadcast({ type: "event", kind: "autostart", data: { inMs: GAME.AUTOSTART_DELAY_MS, players: ready } });
+        } else if (t >= this.autostartAt) {
+          this.autostartAt = 0;
+          this.start();
+        }
+      } else if (this.autostartAt) {
+        // Someone left before it fired: stand the countdown down.
+        this.autostartAt = 0;
+        this.broadcast({ type: "event", kind: "autostart_cancelled", data: {} });
+      }
+    }
     if (this.phase === "countdown" && t >= this.phaseEndsAt) {
       this.phase = "playing";
       this.phaseEndsAt = t + GAME.ROUND_MS;

@@ -225,3 +225,23 @@ h2 { font-size: 18px; margin: 0 0 8px; }
 .hud .swipe canvas { width: 100%; height: 100%; display: block; }
 .hud .top, .hud .menu, .hud .compass, .hud .radar, .hud .feed, .hud .bottom,
 .hud .crosshair, .hud .banner, .hud .dead, .hud .place-menu, .hud .picker { z-index: 2; }
+
+/* --- hero key art ---------------------------------------------------------
+   The canon reserves the aurora for hero screens, so it lives here and nowhere
+   else. Each image is fetched only when its screen is on, and sits under a dark
+   scrim so white type keeps its contrast over any part of the art. */
+.screen.hero, .hud .dead, .hud .banner.hero {
+  background-size: cover;
+  background-position: center;
+  background-repeat: no-repeat;
+}
+.screen.hero::before, .hud .dead::before {
+  content: ""; position: absolute; inset: 0;
+  background: linear-gradient(180deg, rgba(11,12,14,.86) 0%, rgba(11,12,14,.55) 45%, rgba(11,12,14,.92) 100%);
+  pointer-events: none;
+}
+.screen.hero > *, .hud .dead > * { position: relative; z-index: 1; }
+.screen.hero.art-lobby { background-image: url("/assets/art/lobby.webp"); }
+.screen.hero.art-start { background-image: url("/assets/art/start.webp"); }
+.screen.hero.art-victory { background-image: url("/assets/art/victory.webp"); }
+.hud .dead { background-image: url("/assets/art/down.webp"); }

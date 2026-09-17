@@ -33,7 +33,7 @@ export function showLobby(root: HTMLElement, profile: Profile, getFix: () => { l
     const params = new URLSearchParams(location.search);
     const preRoom = (params.get("room") ?? profile.lastRoom ?? "").toUpperCase();
     root.innerHTML = `
-      <div class="screen">
+      <div class="screen hero art-lobby">
         <h1>MobilWar</h1>
         <p class="sub">AR-бой на школьном дворе. Телефон — оружие, двор — карта.</p>
         <div class="card">
