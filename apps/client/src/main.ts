@@ -23,7 +23,7 @@ async function boot(): Promise<void> {
   if (reloading) return;
 
   sensors.start(); // GPS starts asking permission immediately so the lobby can show nearby zones
-  if ((profile.onboarded ?? 0) < ONBOARDING_VERSION) await showOnboarding(root, profile);
+  if ((profile.onboarded ?? 0) < ONBOARDING_VERSION) await showOnboarding(root, profile, sensors);
   for (;;) {
     const res = await showLobby(root, profile, () => (sensors.fix ? { lat: sensors.fix.lat, lon: sensors.fix.lon } : null));
     // Permission gate (must be a user gesture on iOS)

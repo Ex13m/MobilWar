@@ -245,3 +245,15 @@ h2 { font-size: 18px; margin: 0 0 8px; }
 .screen.hero.art-start { background-image: url("/assets/art/start.webp"); }
 .screen.hero.art-victory { background-image: url("/assets/art/victory.webp"); }
 .hud .dead { background-image: url("/assets/art/down.webp"); }
+
+/* --- readiness check in the onboarding ------------------------------------ */
+.ob-card .checks { display: grid; gap: 8px; margin: 14px 0 4px; text-align: left; }
+.ob-card .chk { display: grid; grid-template-columns: 22px 1fr auto; gap: 4px 8px; align-items: baseline;
+  border: 1px solid var(--color-inkline, #151e32); border-radius: 12px; padding: 8px 10px; background: rgba(13,23,43,.6); }
+.ob-card .chk b { grid-row: span 2; font-size: 15px; }
+.ob-card .chk-n { font-size: 13px; }
+.ob-card .chk-v { font-size: 13px; font-variant-numeric: tabular-nums; font-weight: 700; }
+.ob-card .chk small { grid-column: 2 / -1; color: var(--muted); font-size: 11px; line-height: 1.35; }
+.ob-card .chk.ok b, .ob-card .chk.ok .chk-v { color: #4ade80; }
+.ob-card .chk.bad b, .ob-card .chk.bad .chk-v { color: #f59e0b; }
+.ob-card .chk.wait b, .ob-card .chk.wait .chk-v { color: var(--muted); }

@@ -1,13 +1,16 @@
 import { saveProfile, type Profile } from "../storage.js";
+import type { Sensors } from "../sensors.js";
 
 /**
  * Bump when the steps change so returning players see the new explanation once.
  */
-export const ONBOARDING_VERSION = 1;
+export const ONBOARDING_VERSION = 2;
 
 interface Step {
   title: string;
   body: string;
+  /** Renders the live readiness panel under the copy. */
+  checks?: boolean;
   /** Inline SVG illustration; plain shapes, no assets to load. */
   art: string;
 }
@@ -44,6 +47,13 @@ const STEPS: Step[] = [
       <path d="M30 60 L54 60 L60 44 L70 76 L76 60 L92 60" fill="none" stroke="#22d3ee" stroke-width="3"/>`,
   },
   {
+    title: "Проверка перед боем",
+    body: "Прямо сейчас видно, готов ли телефон. Зелёная галочка у всех четырёх строк означает, что можно играть. Если GPS показывает хуже ±12 м, отойди от стен и подожди минуту: в помещении и у зданий погрешность больше радиуса поражения, и попадания станут случайными.",
+    art: `<circle cx="60" cy="60" r="40" fill="none" stroke="#4ade80" stroke-width="3"/>
+      <path d="M40 60 L54 74 L82 46" fill="none" stroke="#4ade80" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/>`,
+    checks: true,
+  },
+  {
     title: "Без экрана — тоже игра",
     body: "Режим без экрана ведёт тебя звуком и вибрацией: телефон в кармане, глаза на дворе. Судья запускает раунд со своей страницы и следит за безопасностью.",
     art: `<rect x="40" y="20" width="40" height="66" rx="8" fill="#1f2937" stroke="#4b5563"/>
@@ -58,18 +68,47 @@ const STEPS: Step[] = [
  * the steps change), skippable, and reachable later from the lobby.
  * Resolves when the player is done.
  */
-export function showOnboarding(root: HTMLElement, profile: Profile): Promise<void> {
+export function showOnboarding(root: HTMLElement, profile: Profile, sensors?: Sensors): Promise<void> {
   return new Promise((resolve) => {
     let i = 0;
+    let checkTimer: number | null = null;
     const el = document.createElement("div");
     el.className = "screen onboarding hero art-lobby";
     root.innerHTML = "";
     root.appendChild(el);
 
     const done = (): void => {
+      if (checkTimer) window.clearInterval(checkTimer);
+      checkTimer = null;
       profile.onboarded = ONBOARDING_VERSION;
       saveProfile(profile);
       resolve();
+    };
+
+    /**
+     * Live readiness check. Telling a parent "make sure GPS is good" is useless
+     * on a lawn; showing them the number their phone is actually reporting, and
+     * whether it is good enough to play, is not.
+     */
+    const renderCheck = (): void => {
+      const acc = sensors?.fix?.acc ?? null;
+      const compass = !!sensors?.hasCompass;
+      const secure = location.protocol === "https:";
+      const row = (ok: boolean | null, name: string, value: string, hint: string) =>
+        `<div class="chk ${ok === null ? "wait" : ok ? "ok" : "bad"}">
+           <b>${ok === null ? "…" : ok ? "✓" : "✕"}</b>
+           <span class="chk-n">${name}</span>
+           <span class="chk-v">${value}</span>
+           <small>${hint}</small>
+         </div>`;
+      const gpsOk = acc === null ? null : acc <= 12;
+      const box = el.querySelector(".checks");
+      if (!box) return;
+      box.innerHTML =
+        row(secure, "Защищённое соединение", secure ? "есть" : "нет", "Без него камера и компас не включатся") +
+        row(gpsOk, "Точность GPS", acc === null ? "жду сигнал…" : `±${Math.round(acc)} м`, "Нужно ±12 м или лучше. Выйди на открытое место, подожди минуту") +
+        row(compass, "Компас", compass ? "работает" : "нет данных", "Нарисуй телефоном восьмёрку в воздухе") +
+        row(navigator.onLine, "Сеть", navigator.onLine ? "есть" : "нет", "Нужен интернет: бой идёт через сервер");
     };
 
     const render = (): void => {
@@ -78,10 +117,17 @@ export function showOnboarding(root: HTMLElement, profile: Profile): Promise<voi
         <svg class="ob-art" viewBox="0 0 120 120" aria-hidden="true">${s.art}</svg>
         <h2>${s.title}</h2>
         <p class="sub">${s.body}</p>
+        ${s.checks ? '<div class="checks"></div>' : ""}
         <div class="ob-dots">${STEPS.map((_, n) => `<i class="${n === i ? "on" : ""}"></i>`).join("")}</div>
         <button class="btn block" id="ob-next">${i === STEPS.length - 1 ? "Начать" : "Дальше"}</button>
         <button class="btn secondary block" id="ob-skip" style="margin-top:8px">${i === STEPS.length - 1 ? "Назад" : "Пропустить"}</button>
       </div>`;
+      if (checkTimer) window.clearInterval(checkTimer);
+      checkTimer = null;
+      if (s.checks) {
+        renderCheck();
+        checkTimer = window.setInterval(renderCheck, 1000);
+      }
       el.querySelector("#ob-next")!.addEventListener("click", () => {
         if (i === STEPS.length - 1) done();
         else {
