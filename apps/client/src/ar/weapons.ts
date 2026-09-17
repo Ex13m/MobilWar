@@ -290,11 +290,16 @@ export class Viewmodel {
     const box = new THREE.Box3().setFromObject(m);
     const c = box.getCenter(new THREE.Vector3());
     m.position.sub(c);
+    // Measure the model while it still has no parent. Box3.setFromObject walks
+    // world matrices, so once the mesh is inside the holder (which hangs off the
+    // camera) the box comes back in world space — and anything positioned from
+    // it and then parented to the holder gets the camera transform applied a
+    // second time, which threw the kit and the muzzle off into the sky.
+    const box2 = new THREE.Box3().setFromObject(m);
     this.model = m;
     this.holder.add(m);
     this.holder.position.set(p.pos[0], p.pos[1], p.pos[2]);
     // muzzle = front of the bounding box along the barrel (-Z after rotation)
-    const box2 = new THREE.Box3().setFromObject(m);
     if (this.kit) {
       this.holder.remove(this.kit);
       this.kit = null;
