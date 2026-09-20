@@ -61,6 +61,23 @@ export function softSpriteTexture(size = 64): THREE.Texture {
   return t;
 }
 
+/** A hollow ring, for shock rings drawn as sprites (always facing the viewer). */
+export function ringSpriteTexture(size = 128): THREE.Texture {
+  const cv = document.createElement("canvas");
+  cv.width = cv.height = size;
+  const c = cv.getContext("2d")!;
+  const g = c.createRadialGradient(size / 2, size / 2, size * 0.28, size / 2, size / 2, size / 2);
+  g.addColorStop(0, "rgba(255,255,255,0)");
+  g.addColorStop(0.62, "rgba(255,255,255,0.95)");
+  g.addColorStop(0.78, "rgba(255,255,255,0.55)");
+  g.addColorStop(1, "rgba(255,255,255,0)");
+  c.fillStyle = g;
+  c.fillRect(0, 0, size, size);
+  const tex = new THREE.CanvasTexture(cv);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  return tex;
+}
+
 export class ParticleSystem {
   readonly points: THREE.Points;
   private pos: Float32Array;

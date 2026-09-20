@@ -343,6 +343,15 @@ export class GameAudio {
     if (!this.playFirst(["g_hit_metal"], { gain: 0.5, rate: 1.25, rel, dist, reverb: 0.15 })) this.osc(180, 0.07, "sine", 0.12, 90);
   }
 
+  /** A shell tearing open in the air: a crack, then the crackle of the salute. */
+  airburst(rel?: { x: number; z: number }, dist = 10): void {
+    if (!this.playFirst(["g_explosion_mid", "g_grenade"], { gain: 0.75, rate: 1.2, rel, dist, reverb: 0.45 })) {
+      this.noise(0.25, 0.5, 6000, 500);
+      this.osc(70, 0.25, "sine", 0.3, 40);
+    }
+    this.vibrate(dist < 8 ? [60, 30, 40] : 15);
+  }
+
   shieldHit(): void {
     if (!this.playFirst(["g_hit_shield"], { gain: 0.8 })) this.play("zap", { gain: 0.6, rate: 1.3 });
     this.vibrate(30);

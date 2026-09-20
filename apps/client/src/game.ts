@@ -331,6 +331,7 @@ export class Game {
             from,
             undefined,
             def?.speedMps,
+            def?.ammo,
           );
         }
       }
@@ -499,7 +500,7 @@ export class Game {
     if (m.weapon === "turret") this.scene.turretRecoil(m.shooterId);
     const from = new THREE.Vector3(m.x, m.weapon === "drone" ? 3 : m.weapon === "turret" ? 0.8 : 1.3, m.z);
     const hitMe = m.targetId === this.world.myId;
-    this.scene.bolt(m.x, m.z, m.heading, m.pitch ?? 0, GAME.RIFLE_RANGE_M, color, target, from, hitMe ? () => this.scene?.fx.hitSpark(new THREE.Vector3(this.world.me.x, 1.2, this.world.me.z), FX.hit) : undefined, def?.speedMps);
+    this.scene.bolt(m.x, m.z, m.heading, m.pitch ?? 0, GAME.RIFLE_RANGE_M, color, target, from, hitMe ? () => this.scene?.fx.hitSpark(new THREE.Vector3(this.world.me.x, 1.2, this.world.me.z), FX.hit) : undefined, def?.speedMps, def?.ammo);
   }
 
   private onEvent(kind: string, data?: Record<string, unknown>): void {
@@ -571,6 +572,19 @@ export class Game {
       case "empty":
         this.o.audio.empty();
         return;
+      case "airburst": {
+        // Разрывной: a shell tearing open in the air, salute-style.
+        const x = Number(data?.x);
+        const z = Number(data?.z);
+        const r = Number(data?.r ?? 3);
+        const def = data?.weaponId ? weaponById(String(data.weaponId)) : undefined;
+        const d = Math.hypot(x - this.world.me.x, z - this.world.me.z);
+        const rel = this.relTo(x, z) * (Math.PI / 180);
+        this.scene?.fx.airburst(new THREE.Vector3(x, 1.6, z), def?.color ?? 0xffc266, r);
+        this.o.audio.airburst({ x: Math.sin(rel) * Math.min(d, 30), z: -Math.cos(rel) * Math.min(d, 30) }, d);
+        if (d < r + 1.5) this.scene?.addShake(1.5);
+        return;
+      }
       case "pickup_soon": {
         // Quake's timing game: both teams hear the clock on the big items and
         // start moving before it lands.

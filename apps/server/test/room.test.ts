@@ -770,3 +770,48 @@ describe("Room", () => {
     expect(pb.alive).toBe(false);
   });
 });
+
+describe("разрывные (flak)", () => {
+  it("tears open at the target and takes the man standing next to him", () => {
+    const { room, pa, pb, a, advance, startPlaying } = setup();
+    startPlaying();
+    // a third player on the enemy team, 3 m to the side of the one being shot at
+    const c = mkClient("c");
+    const pc = room.join(c, { nick: "C", avatar: "scout", playMode: "ar", deviceId: "dc", team: "blue" });
+    const flak = WEAPON_CATALOG.blaster.find((w) => w.trait === "flak")!;
+    expect(room.equip(pa, "blaster", flak.id)).toBe(true);
+    room.selectWeapon(pa, "blaster");
+    room.updatePosition(pa, origin.lat, origin.lon, 1, 0);
+    const target = destination(origin, 0, 20);
+    room.updatePosition(pb, target.lat, target.lon, 1, 180);
+    const beside = destination(target, 90, 3);
+    room.updatePosition(pc, beside.lat, beside.lon, 1, 180);
+    const hp0 = { b: pb.hp, c: pc.hp };
+    room.shoot(pa, 0, "blaster");
+    advance((20 / flak.speedMps) * 1000 + 60);
+    room.tick();
+    expect(pb.hp, "the one aimed at takes the round").toBeLessThan(hp0.b);
+    expect(pc.hp, "his neighbour takes the burst").toBeLessThan(hp0.c);
+    // the round is not counted twice on the primary target
+    expect(hp0.b - pb.hp).toBeLessThanOrEqual(flak.damage);
+    expect(a.inbox.some((m) => m.type === "event" && m.kind === "airburst")).toBe(true);
+  });
+
+  it("bursts in empty air when it passes nobody", () => {
+    const { room, pa, pb, a, advance, startPlaying } = setup();
+    startPlaying();
+    const flak = WEAPON_CATALOG.blaster.find((w) => w.trait === "flak")!;
+    room.equip(pa, "blaster", flak.id);
+    room.selectWeapon(pa, "blaster");
+    room.updatePosition(pa, origin.lat, origin.lon, 1, 0);
+    const far = destination(origin, 180, 40); // enemy behind the shooter
+    room.updatePosition(pb, far.lat, far.lon, 1, 0);
+    const hp0 = pb.hp;
+    room.shoot(pa, 0, "blaster");
+    advance((flak.rangeM / flak.speedMps) * 1000 + 60);
+    room.tick();
+    const evt = a.inbox.find((m) => m.type === "event" && m.kind === "airburst");
+    expect(evt, "the shell still goes off — as a firework").toBeTruthy();
+    expect(pb.hp, "nobody is hurt by it").toBe(hp0);
+  });
+});

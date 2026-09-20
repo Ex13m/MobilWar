@@ -2,11 +2,11 @@ import * as THREE from "three";
 import { EffectComposer, EffectPass, RenderPass, BloomEffect, SMAAEffect, SMAAPreset, ToneMappingEffect, ToneMappingMode, BlendFunction } from "postprocessing";
 import { RoomEnvironment } from "three/examples/jsm/environments/RoomEnvironment.js";
 import { GradeEffect } from "../fx/grade.js";
-import { GAME, TEAM_COLORS, type Team, type WorldObject } from "@mobilwar/shared";
+import { GAME, TEAM_COLORS, type AmmoKind, type Team, type WorldObject } from "@mobilwar/shared";
 import type { RemotePlayer, WorldState } from "../state.js";
 import type { Orientation } from "../sensors.js";
 import { buildAvatar, buildBarrier, buildFlag, buildLabel, buildMedkit, updateLabel } from "./avatars.js";
-import { Effects, FX } from "../fx/effects.js";
+import { Effects, FX, type BoltSkin } from "../fx/effects.js";
 import { Viewmodel } from "./weapons.js";
 import { loadModel, sprite, type ModelId } from "../assets.js";
 
@@ -566,6 +566,7 @@ export class ArScene {
     from?: THREE.Vector3,
     onArrive?: () => void,
     speedMps?: number,
+    ammo?: AmmoKind,
   ): void {
     const h = headingDeg * DEG;
     const p = pitchDeg * DEG;
@@ -577,9 +578,11 @@ export class ArScene {
     const end = target
       ? new THREE.Vector3(target.x, 1.0, target.z)
       : new THREE.Vector3(start.x + Math.sin(h) * cp * len, start.y + Math.sin(p) * len, start.z - Math.cos(h) * cp * len);
-    // Each weapon's round flies at its own speed, so a plasma lob and a rail
-    // slug read completely differently even along the same line.
-    this.fx.bolt(start, end, color, speedMps ?? GAME.WEAPONS.blaster.SPEED_MPS, onArrive);
+    // Each weapon's round flies at its own speed AND is drawn as its own kind of
+    // object, so a plasma lob and a rail slug read completely differently along
+    // the same line.
+    const skin: BoltSkin = ammo === "rail" ? "beam" : ammo === "plasma" ? "orb" : ammo === "energy" ? "bolt" : "streak";
+    this.fx.bolt(start, end, color, speedMps ?? GAME.WEAPONS.blaster.SPEED_MPS, onArrive, skin);
   }
 
   playerPos(id: string): THREE.Vector3 | null {

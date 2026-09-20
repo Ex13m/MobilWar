@@ -24,6 +24,7 @@ export type Trait =
   | "emp" // heavy: disables shields/turrets/drones in splash for 6 s
   | "homing" // heavy: wide aim-assist cone
   | "cluster" // heavy: 3 sub-explosions
+  | "flak" // разрывной: a round that tears open where it passes, hurting everyone within `splashM`
   | "overheat" // rifle: 6 s continuous → 3 s lock
   | "charge" // sniper: hold for charged damage
   | "heal"; // pistol: heals allies it "hits"
@@ -173,7 +174,7 @@ const RIFLES: Row[] = [
   ["Сирена", "цепь на 2, лечит стрелка", "chain", 7, 130, 50, 7, 30, 2000, "rifle", 0x5eead4, 1.45],
   ["Скала", "медленная, 20 урона", "none", 20, 240, 70, 5, 12, 2500, "rifle2", 0x94a3b8, 0.95],
   ["Стрекоза", "самая быстрая", "none", 5, 55, 50, 9, 50, 2000, "minigun", 0xfef3c7, 1.5],
-  ["Рассвет", "сбалансированная-2", "none", 10, 110, 60, 7, 30, 1900, "rifle", 0xfdba74, 1.1],
+  ["Салют", "разрывные: задевают соседей, сплэш 3.5 м", "flak", 7, 240, 55, 8, 24, 2100, "rifle2", 0xfda4af, 1.05, { splashM: 3.5, damageEdge: 2 }],
   ["Вьюн", "6 дробин + цепь", "pellets", 3, 420, 20, 12, 8, 2200, "rifle3", 0x22d3ee, 0.9, { pellets: 6 }],
   ["Ноль-В", "тренировочная: 1 урон", "none", 1, 60, 60, 8, 100, 500, "rifle", 0xffffff, 1.6],
 ];
@@ -191,7 +192,7 @@ const SNIPERS: Row[] = [
   ["Двустволка", "2 выстрела подряд", "burst", 35, 1600, 100, 4, 6, 3000, "sniper2", 0xfb923c, 0.7, { burst: 2 }],
   ["Заряд-2", "быстрый заряд 0.4 с → 80", "charge", 40, 1100, 110, 3, 5, 2800, "sniper", 0xe879f9, 0.6, { chargeMs: 400, chargedDamage: 80 }],
   ["Заряд-3", "долгий заряд 1.5 с → 130", "charge", 40, 1200, 120, 3, 5, 2800, "sniper2", 0xf43f5e, 0.55, { chargeMs: 1500, chargedDamage: 130 }],
-  ["Буревестник", "широкий конус 6°, 40", "none", 40, 1000, 90, 6, 6, 2600, "sniper", 0x93c5fd, 0.8],
+  ["Зенитка", "разрывной снаряд, сплэш 5 м", "flak", 30, 1300, 110, 5, 5, 2900, "sniper2", 0xfcd34d, 0.7, { splashM: 5, damageEdge: 5 }],
   ["Гарпун", "пробитие + стан", "pierce", 40, 1300, 110, 3, 4, 3000, "sniper2", 0xa3e635, 0.65, { stunMs: 500 }],
   ["Фонарь", "медик: лечит союзника на 40", "heal", 40, 1200, 100, 4, 5, 2800, "sniper", 0x86efac, 0.7],
   ["Ледник", "стан 2 с, 25 урона", "stun", 25, 1500, 110, 3, 5, 3000, "sniper2", 0xbae6fd, 0.85, { stunMs: 2000 }],
@@ -263,6 +264,7 @@ const AMMO_BUDGET: Record<Slot, number> = { pistol: 600, blaster: 1400, sniper: 
 function ammoFor(slot: Slot, trait: Trait, damage: number, id: string): AmmoKind {
   if (slot === "rocket") return "rocket";
   if (trait === "charge") return "rail";
+  if (trait === "flak") return "energy";
   if (trait === "burn" || trait === "emp" || trait === "chain") return "plasma";
   if (trait === "pierce") return "rail";
   // A very hard-hitting sniper round reads as a slug, not a pulse.

@@ -189,6 +189,8 @@ export class Room {
     weapon: WeaponId;
     defId: string;
   }> = [];
+  /** Airbursts in flight: a flak round tears open here when it gets there. */
+  private pendingBursts: Array<{ at: number; x: number; z: number; shooterId: string; defId: string; skip: string[] }> = [];
   private lastPickupSpawn = 0;
   /** Quake-style item points: fixed places, fixed clocks (GAME.ITEMS). */
   private itemPoints: Array<{ kind: PickupKind; x: number; z: number; nextAt: number; objId: string | null; warned: boolean }> = [];
@@ -550,6 +552,15 @@ export class Room {
         if (obj) this.damageObject(obj, dmg);
       }
     }
+    if (W.trait === "flak") {
+      // A разрывной round tears open where it arrives and takes whoever is
+      // standing next to the target with it. Whoever ate the round itself is
+      // skipped, so a direct hit is never counted twice.
+      const direct = firstDone && evt.targetId ? (this.players.get(evt.targetId) ?? this.objects.get(evt.targetId)) : null;
+      const burst = direct ? { x: direct.x, z: direct.z, dist: distLocal(p, direct) } : this.flakBurstPoint(p, W);
+      const skip = [evt.targetId, ...extra.map((e) => e.targetId)].filter((x): x is string => !!x);
+      this.pendingBursts.push({ at: t + (burst.dist / Math.max(1, W.speedMps)) * 1000, x: burst.x, z: burst.z, shooterId: p.id, defId: W.id, skip });
+    }
     if (!firstDone && !evt.blockedBy) {
       const wall = this.barrierBetween(p, rayEnd(p, p.heading, W.rangeM));
       if (wall) {
@@ -559,6 +570,66 @@ export class Room {
     }
     if (extra.length) evt.extraHits = extra;
     this.broadcast(evt);
+  }
+
+  /**
+   * Where a flak round goes off: at the point of closest approach to the
+   * nearest enemy along the line of fire, or at the end of the line when it
+   * passes nobody (there it is a firework and nothing else).
+   */
+  private flakBurstPoint(p: Player, W: WeaponDef): { x: number; z: number; dist: number } {
+    const h = (p.heading * Math.PI) / 180;
+    const dx = Math.sin(h);
+    const dz = -Math.cos(h);
+    let best = W.rangeM;
+    let found = false;
+    const candidates: Array<{ x: number; z: number }> = [
+      ...[...this.players.values()].filter((q) => q.alive && !q.isReferee && this.isEnemy(p, q)),
+      ...[...this.objects.values()].filter((o) => o.hp > 0 && o.team !== null && o.team !== p.team),
+    ];
+    for (const q of candidates) {
+      const vx = q.x - p.x;
+      const vz = q.z - p.z;
+      const along = vx * dx + vz * dz;
+      if (along <= 0 || along > W.rangeM) continue;
+      const perp = Math.hypot(vx - along * dx, vz - along * dz);
+      if (perp > W.splashM) continue;
+      if (!found || along < best) {
+        best = along;
+        found = true;
+      }
+    }
+    return { x: p.x + dx * best, z: p.z + dz * best, dist: best };
+  }
+
+  /** Set off the flak rounds whose flight is over. */
+  private tickBursts(t: number): void {
+    if (!this.pendingBursts.length) return;
+    const still: typeof this.pendingBursts = [];
+    for (const b of this.pendingBursts) {
+      if (b.at > t) {
+        still.push(b);
+        continue;
+      }
+      const W = weaponById(b.defId);
+      const shooter = this.players.get(b.shooterId);
+      if (!W) continue;
+      this.broadcast({ type: "event", kind: "airburst", data: { x: b.x, z: b.z, r: W.splashM, weaponId: W.id, by: b.shooterId } });
+      for (const q of this.players.values()) {
+        if (!q.alive || q.isReferee || !shooter || !this.isEnemy(shooter, q) || q.protectedUntil > t) continue;
+        if (b.skip.includes(q.id)) continue;
+        const d = distLocal({ x: b.x, z: b.z }, q);
+        const dmg = splashDamage(d, W.splashM, W.damage, W.damageEdge);
+        if (dmg > 0) this.applyHit(shooter, q, dmg, W.slot, W, t);
+      }
+      for (const o of this.objects.values()) {
+        if (o.hp <= 0 || o.team === null || !shooter || o.team === shooter.team || b.skip.includes(o.id)) continue;
+        const d = distLocal({ x: b.x, z: b.z }, o);
+        const dmg = splashDamage(d, W.splashM, W.damage, W.damageEdge);
+        if (dmg > 0) this.damageObject(o, dmg);
+      }
+    }
+    this.pendingBursts = still;
   }
 
   /** Apply a hit with the weapon's trait side effects. */
@@ -1140,6 +1211,7 @@ export class Room {
     this.tickRespawns(t);
     this.tickAim(t);
     this.tickPendingHits(t);
+    this.tickBursts(t);
     this.tickProjectiles(t);
     this.tickTurrets(t);
     this.tickDrones(t);

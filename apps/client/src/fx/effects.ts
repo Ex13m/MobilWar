@@ -1,5 +1,5 @@
 import * as THREE from "three";
-import { ParticleSystem, softSpriteTexture } from "./particles.js";
+import { ParticleSystem, ringSpriteTexture, softSpriteTexture } from "./particles.js";
 
 /** Visual language: team colours + weapon colours. */
 export const FX = {
@@ -14,8 +14,18 @@ export const FX = {
   shield: 0x38bdf8,
 };
 
+/**
+ * How a round is drawn. Borrowed from the pooled "skins" in the TreaskaAr
+ * prototype: one projectile object per class instead of one capsule for
+ * everything, so a slug, an energy bolt and a plasma orb read differently in
+ * the air.
+ */
+export type BoltSkin = "streak" | "bolt" | "orb" | "beam";
+
 interface Bolt {
+  skin: BoltSkin;
   mesh: THREE.Mesh;
+  core: THREE.Object3D | null;
   glow: THREE.Sprite;
   light: THREE.PointLight | null;
   from: THREE.Vector3;
@@ -54,8 +64,15 @@ export class Effects {
   private bolts: Bolt[] = [];
   private fireballs: Fireball[] = [];
   private labels: Label[] = [];
+  /** Airburst extras: the ring sprite, the delayed crackle, the flash light. */
+  private billboards: Array<{ sprite: THREE.Sprite; t: number; dur: number; radius: number }> = [];
+  private crackles: Array<{ pos: THREE.Vector3; color: number; at: number; radius: number }> = [];
+  private flashes: Array<{ light: THREE.PointLight; t: number; dur: number; peak: number }> = [];
   private glowTex = softSpriteTexture(64);
+  private ringTex = ringSpriteTexture(128);
   private boltGeo = new THREE.CapsuleGeometry(0.07, 1, 4, 8); // unit length, stretched per frame
+  private coreGeo = new THREE.CylinderGeometry(0.045, 0.045, 1, 8);
+  private orbGeo = new THREE.IcosahedronGeometry(0.17, 0);
   private ringGeo = new THREE.RingGeometry(0.9, 1, 48);
   private sphereGeo = new THREE.SphereGeometry(1, 16, 12);
   private lightBudget = 4;
@@ -63,21 +80,44 @@ export class Effects {
   constructor(private scene: THREE.Object3D) {
     this.particles = new ParticleSystem(scene, 3000, this.glowTex);
     this.boltGeo.rotateX(Math.PI / 2); // capsule along Z
+    this.coreGeo.rotateX(Math.PI / 2);
   }
 
-  /** A glowing tracer flying from → to (world coords). Speed in m/s. */
-  bolt(from: THREE.Vector3, to: THREE.Vector3, color: number, speed = 70, onArrive?: () => void): void {
-    const mat = new THREE.MeshBasicMaterial({ color: new THREE.Color(color).multiplyScalar(3.5), transparent: true, opacity: 0.95, blending: THREE.AdditiveBlending, depthWrite: false, toneMapped: false });
+  /**
+   * A round in flight, drawn according to its class:
+   *  - `streak` — a bullet: a thin stretched trace, the way a tracer reads;
+   *  - `bolt`   — an energy round: a solid glowing rod with a halo;
+   *  - `orb`    — plasma: a tumbling ball of fire leaving sparks behind it;
+   *  - `beam`   — a rail slug: the whole line at once, gone in a blink.
+   * Speed is in m/s; the drawing caps it (see below) while the server keeps the
+   * real one for damage.
+   */
+  bolt(from: THREE.Vector3, to: THREE.Vector3, color: number, speed = 70, onArrive?: () => void, skin: BoltSkin = "streak"): void {
+    const hot = new THREE.Color(color).multiplyScalar(3.5);
+    const mat = new THREE.MeshBasicMaterial({ color: hot, transparent: true, opacity: 0.95, blending: THREE.AdditiveBlending, depthWrite: false, toneMapped: false });
     const mesh = new THREE.Mesh(this.boltGeo, mat);
     mesh.position.copy(from);
     mesh.lookAt(to);
     mesh.scale.set(1, 1, 0.02);
     const glow = new THREE.Sprite(new THREE.SpriteMaterial({ map: this.glowTex, color: new THREE.Color(color).multiplyScalar(2.5), transparent: true, blending: THREE.AdditiveBlending, depthWrite: false, opacity: 0.9, toneMapped: false }));
-    glow.scale.set(0.8, 0.8, 1);
+    glow.scale.setScalar(skin === "orb" ? 1.3 : skin === "bolt" ? 0.95 : 0.8);
     glow.position.copy(from);
+    // The solid part of an energy round or a plasma ball: a real object in the
+    // air rather than a smear, which is what makes it read as 3D.
+    let core: THREE.Object3D | null = null;
+    if (skin === "bolt" || skin === "orb") {
+      const cm = new THREE.MeshBasicMaterial({ color: new THREE.Color(0xffffff).lerp(new THREE.Color(color), 0.35), toneMapped: false });
+      core = new THREE.Mesh(skin === "orb" ? this.orbGeo : this.coreGeo, cm);
+      if (skin === "bolt") {
+        core.scale.set(1, 1, 0.55);
+        core.lookAt(to.clone().sub(from).add(core.position));
+      }
+      core.position.copy(from);
+      this.scene.add(core);
+    }
     let light: THREE.PointLight | null = null;
     if (this.lightBudget > 0) {
-      light = new THREE.PointLight(color, 6, 6, 2);
+      light = new THREE.PointLight(color, skin === "orb" ? 9 : 6, skin === "orb" ? 9 : 6, 2);
       light.position.copy(from);
       this.scene.add(light);
       this.lightBudget--;
@@ -89,13 +129,49 @@ export class Effects {
     // and a railgun is instant. The server keeps the real speed for damage;
     // the tracer is drawn at a capped one, held for a floor, and stretched
     // into a streak so the shot reads as a line going out, not as a dot.
-    const shown = Math.min(speed, 120);
-    const dur = Math.max(0.15, dist / shown);
-    const tailM = Math.min(9, Math.max(2, dist * 0.5));
-    this.bolts.push({ mesh, glow, light, from: from.clone(), to: to.clone(), dist, tailM, t: 0, dur, fade: 0.12, arrived: false, onArrive });
+    const shown = Math.min(speed, skin === "orb" ? 45 : 120);
+    const dur = skin === "beam" ? 0.001 : Math.max(0.15, dist / shown);
+    const tailM = skin === "beam" ? dist : skin === "streak" ? Math.min(9, Math.max(2, dist * 0.5)) : skin === "bolt" ? 1.6 : 0.9;
+    this.bolts.push({ skin, mesh, core, glow, light, from: from.clone(), to: to.clone(), dist, tailM, t: 0, dur, fade: skin === "beam" ? 0.2 : 0.12, arrived: false, onArrive });
+    if (skin === "beam") {
+      // The rail slug is already there: draw the full line and let it decay.
+      mesh.scale.set(1.6, 1.6, dist);
+      mesh.position.lerpVectors(from, to, 0.5);
+      this.particles.emit({ pos: to, count: 14, spread: 4, life: 0.35, size: 0.12, color, color2: 0xffffff, drag: 1.5 });
+    }
     // muzzle sparks
     const dir = to.clone().sub(from).normalize();
     this.particles.emit({ pos: from, count: 10, vel: dir.multiplyScalar(6), spread: 3, life: 0.25, size: 0.18, color, color2: 0xffffff, drag: 2 });
+  }
+
+  /**
+   * An airburst: a round that tears open in the air rather than on someone.
+   * Two shells (colour, then a white core), a ring facing the viewer and a
+   * crackle of falling sparks — a firework, which is exactly what it looks like
+   * from twenty metres away.
+   */
+  airburst(pos: THREE.Vector3, color: number, radius = 3): void {
+    this.particles.emit({ pos, count: 60, spread: 7 * (radius / 3), life: 0.75, lifeVar: 0.3, size: 0.22, color, color2: 0xffffff, gravity: 5, drag: 0.8 });
+    this.particles.emit({ pos, count: 26, spread: 3.2, life: 0.35, size: 0.4, color: 0xffffff, color2: color, drag: 2.5 });
+    // the crackle: a second, smaller shell a moment later, falling
+    this.crackles.push({ pos: pos.clone(), color, at: 0.16, radius });
+    this.billboardRing(pos, color, radius);
+    if (this.lightBudget > 0) {
+      const l = new THREE.PointLight(color, 25, radius * 6, 2);
+      l.position.copy(pos);
+      this.scene.add(l);
+      this.lightBudget--;
+      this.flashes.push({ light: l, t: 0, dur: 0.45, peak: 25 });
+    }
+  }
+
+  /** A shock ring that always faces the viewer, for bursts that happen in the air. */
+  private billboardRing(pos: THREE.Vector3, color: number, radius: number): void {
+    const s = new THREE.Sprite(new THREE.SpriteMaterial({ map: this.ringTex, color: new THREE.Color(color).multiplyScalar(2), transparent: true, blending: THREE.AdditiveBlending, depthWrite: false, opacity: 0.9, toneMapped: false }));
+    s.position.copy(pos);
+    s.scale.setScalar(0.4);
+    this.scene.add(s);
+    this.billboards.push({ sprite: s, t: 0, dur: 0.45, radius });
   }
 
   muzzleFlash(pos: THREE.Vector3, dir: THREE.Vector3, color: number): void {
@@ -170,23 +246,72 @@ export class Effects {
       // and, once the head is home, runs in over `fade` so the streak collapses
       // into the hit instead of blinking out.
       const f = b.arrived ? Math.min(1, (b.t - b.dur) / b.fade) : 0;
-      const tailK = Math.max(0, Math.min(1, k - (b.tailM / b.dist) * (1 - f)));
-      const seg = Math.max(0.02, (k - tailK) * b.dist);
-      b.mesh.position.lerpVectors(b.from, b.to, (k + tailK) / 2);
-      b.mesh.scale.z = seg;
-      (b.mesh.material as THREE.MeshBasicMaterial).opacity = 0.95 * (1 - f * f);
-      b.glow.position.lerpVectors(b.from, b.to, k);
-      (b.glow.material as THREE.SpriteMaterial).opacity = 0.9 * (1 - f);
+      if (b.skin === "beam") {
+        // The whole line is already drawn: it only fades.
+        (b.mesh.material as THREE.MeshBasicMaterial).opacity = 0.95 * (1 - f) * (1 - f);
+        (b.glow.material as THREE.SpriteMaterial).opacity = 0;
+      } else {
+        const tailK = Math.max(0, Math.min(1, k - (b.tailM / b.dist) * (1 - f)));
+        const seg = Math.max(0.02, (k - tailK) * b.dist);
+        b.mesh.position.lerpVectors(b.from, b.to, (k + tailK) / 2);
+        b.mesh.scale.z = seg;
+        (b.mesh.material as THREE.MeshBasicMaterial).opacity = (b.skin === "streak" ? 0.95 : 0.55) * (1 - f * f);
+        b.glow.position.lerpVectors(b.from, b.to, k);
+        (b.glow.material as THREE.SpriteMaterial).opacity = 0.9 * (1 - f);
+      }
+      if (b.core) {
+        b.core.position.copy(b.glow.position);
+        if (b.skin === "orb") {
+          // A plasma ball tumbles and drops sparks, the way the TreaskaAr orbs do.
+          b.core.rotation.x += dt * 6;
+          b.core.rotation.y += dt * 4;
+          if (!b.arrived && Math.random() < dt * 20) {
+            this.particles.emit({ pos: b.core.position, count: 2, spread: 0.6, life: 0.35, size: 0.14, color: (b.glow.material as THREE.SpriteMaterial).color.getHex(), color2: 0xffffff, gravity: 1.5, drag: 1.6 });
+          }
+        }
+        b.core.visible = f < 1;
+      }
       if (b.light) {
         b.light.position.copy(b.glow.position);
         b.light.intensity = 6 * (1 - f);
       }
       if (b.t >= b.dur + b.fade) {
         this.scene.remove(b.mesh, b.glow);
+        if (b.core) this.scene.remove(b.core);
         if (b.light) {
           this.scene.remove(b.light);
           this.lightBudget++;
         }
+        return false;
+      }
+      return true;
+    });
+    // airburst extras: expanding ring, the delayed crackle, the flash light
+    this.billboards = this.billboards.filter((b) => {
+      b.t += dt;
+      const k = Math.min(1, b.t / b.dur);
+      b.sprite.scale.setScalar(0.4 + b.radius * 2.2 * Math.sqrt(k));
+      (b.sprite.material as THREE.SpriteMaterial).opacity = 0.9 * (1 - k);
+      if (k >= 1) {
+        this.scene.remove(b.sprite);
+        (b.sprite.material as THREE.SpriteMaterial).dispose();
+        return false;
+      }
+      return true;
+    });
+    this.crackles = this.crackles.filter((c) => {
+      c.at -= dt;
+      if (c.at > 0) return true;
+      this.particles.emit({ pos: c.pos, count: 34, spread: 4.5 * (c.radius / 3), life: 0.9, lifeVar: 0.4, size: 0.12, color: 0xffffff, color2: c.color, gravity: 9, drag: 0.5 });
+      return false;
+    });
+    this.flashes = this.flashes.filter((fl) => {
+      fl.t += dt;
+      const k = Math.min(1, fl.t / fl.dur);
+      fl.light.intensity = fl.peak * (1 - k) * (1 - k);
+      if (k >= 1) {
+        this.scene.remove(fl.light);
+        this.lightBudget++;
         return false;
       }
       return true;

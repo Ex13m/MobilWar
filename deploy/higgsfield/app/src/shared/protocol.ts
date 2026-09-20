@@ -319,6 +319,7 @@ export interface EventMsg {
     | "object_placed"
     | "object_destroyed"
     | "explosion"
+    | "airburst"
     | "grenade"
     | "shrapnel"
     | "lock_on"
