@@ -20,8 +20,12 @@ interface Bolt {
   light: THREE.PointLight | null;
   from: THREE.Vector3;
   to: THREE.Vector3;
+  dist: number;
+  tailM: number;
   t: number;
   dur: number;
+  fade: number;
+  arrived: boolean;
   onArrive?: () => void;
 }
 
@@ -51,7 +55,7 @@ export class Effects {
   private fireballs: Fireball[] = [];
   private labels: Label[] = [];
   private glowTex = softSpriteTexture(64);
-  private boltGeo = new THREE.CapsuleGeometry(0.06, 0.9, 4, 8);
+  private boltGeo = new THREE.CapsuleGeometry(0.07, 1, 4, 8); // unit length, stretched per frame
   private ringGeo = new THREE.RingGeometry(0.9, 1, 48);
   private sphereGeo = new THREE.SphereGeometry(1, 16, 12);
   private lightBudget = 4;
@@ -61,24 +65,34 @@ export class Effects {
     this.boltGeo.rotateX(Math.PI / 2); // capsule along Z
   }
 
-  /** A glowing bolt flying from → to (world coords). Speed in m/s. */
+  /** A glowing tracer flying from → to (world coords). Speed in m/s. */
   bolt(from: THREE.Vector3, to: THREE.Vector3, color: number, speed = 70, onArrive?: () => void): void {
     const mat = new THREE.MeshBasicMaterial({ color: new THREE.Color(color).multiplyScalar(3.5), transparent: true, opacity: 0.95, blending: THREE.AdditiveBlending, depthWrite: false, toneMapped: false });
     const mesh = new THREE.Mesh(this.boltGeo, mat);
     mesh.position.copy(from);
     mesh.lookAt(to);
+    mesh.scale.set(1, 1, 0.02);
     const glow = new THREE.Sprite(new THREE.SpriteMaterial({ map: this.glowTex, color: new THREE.Color(color).multiplyScalar(2.5), transparent: true, blending: THREE.AdditiveBlending, depthWrite: false, opacity: 0.9, toneMapped: false }));
-    glow.scale.set(0.7, 0.7, 1);
-    mesh.add(glow);
+    glow.scale.set(0.8, 0.8, 1);
+    glow.position.copy(from);
     let light: THREE.PointLight | null = null;
     if (this.lightBudget > 0) {
       light = new THREE.PointLight(color, 6, 6, 2);
-      mesh.add(light);
+      light.position.copy(from);
+      this.scene.add(light);
       this.lightBudget--;
     }
-    this.scene.add(mesh);
-    const dist = from.distanceTo(to);
-    this.bolts.push({ mesh, glow, light, from: from.clone(), to: to.clone(), t: 0, dur: Math.max(0.05, dist / speed), onArrive });
+    this.scene.add(mesh, glow);
+    const dist = Math.max(0.05, from.distanceTo(to));
+    // A round leaving the camera is seen end-on and recedes, so the honest
+    // flight time is not watchable: 400 m/s over 20 m is 50 ms, three frames,
+    // and a railgun is instant. The server keeps the real speed for damage;
+    // the tracer is drawn at a capped one, held for a floor, and stretched
+    // into a streak so the shot reads as a line going out, not as a dot.
+    const shown = Math.min(speed, 120);
+    const dur = Math.max(0.15, dist / shown);
+    const tailM = Math.min(9, Math.max(2, dist * 0.5));
+    this.bolts.push({ mesh, glow, light, from: from.clone(), to: to.clone(), dist, tailM, t: 0, dur, fade: 0.12, arrived: false, onArrive });
     // muzzle sparks
     const dir = to.clone().sub(from).normalize();
     this.particles.emit({ pos: from, count: 10, vel: dir.multiplyScalar(6), spread: 3, life: 0.25, size: 0.18, color, color2: 0xffffff, drag: 2 });
@@ -148,11 +162,31 @@ export class Effects {
     this.bolts = this.bolts.filter((b) => {
       b.t += dt;
       const k = Math.min(1, b.t / b.dur);
-      b.mesh.position.lerpVectors(b.from, b.to, k);
-      if (k >= 1) {
-        this.scene.remove(b.mesh);
-        if (b.light) this.lightBudget++;
+      if (!b.arrived && k >= 1) {
+        b.arrived = true;
         b.onArrive?.();
+      }
+      // The head runs from muzzle to impact; the tail trails tailM behind it
+      // and, once the head is home, runs in over `fade` so the streak collapses
+      // into the hit instead of blinking out.
+      const f = b.arrived ? Math.min(1, (b.t - b.dur) / b.fade) : 0;
+      const tailK = Math.max(0, Math.min(1, k - (b.tailM / b.dist) * (1 - f)));
+      const seg = Math.max(0.02, (k - tailK) * b.dist);
+      b.mesh.position.lerpVectors(b.from, b.to, (k + tailK) / 2);
+      b.mesh.scale.z = seg;
+      (b.mesh.material as THREE.MeshBasicMaterial).opacity = 0.95 * (1 - f * f);
+      b.glow.position.lerpVectors(b.from, b.to, k);
+      (b.glow.material as THREE.SpriteMaterial).opacity = 0.9 * (1 - f);
+      if (b.light) {
+        b.light.position.copy(b.glow.position);
+        b.light.intensity = 6 * (1 - f);
+      }
+      if (b.t >= b.dur + b.fade) {
+        this.scene.remove(b.mesh, b.glow);
+        if (b.light) {
+          this.scene.remove(b.light);
+          this.lightBudget++;
+        }
         return false;
       }
       return true;

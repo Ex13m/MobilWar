@@ -9,3 +9,4 @@ data/*.db
 data/*.db-*
 coverage/
 .vite/
+apps/server/data/
