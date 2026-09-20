@@ -110,13 +110,28 @@ export function rayEnd(from: Vec2, heading: number, len: number): Vec2 {
 }
 
 /**
- * Doom damage roll: the original engine never computed damage, it rolled it —
- * the pistol is 5 * (1..3). `base` keeps the mean, so balance is unchanged and
- * only the variance appears: half damage, base damage, half again.
+ * Where a thrown grenade is along its flight, as a fraction of the throw.
+ * Quake's grenade launcher does not drop its round on the aim point: it lands
+ * short, bounces a few times with less height each hop, and rolls out the rest
+ * of the fuse. `k` is the elapsed fraction of the flight, `d` the fraction of
+ * the range covered, `y` the height as a fraction of the throw apex.
  */
-export function doomRoll(base: number, rnd: () => number): number {
-  const unit = Math.max(1, Math.round(base / 2));
-  return unit * (1 + Math.floor(rnd() * GAME.DOOM.DICE));
+export function grenadeHop(k: number): { d: number; y: number } {
+  const hops = GAME.GRENADE.HOPS;
+  const kk = Math.max(0, Math.min(1, k));
+  let start = 0;
+  let dist = 0;
+  for (let i = 0; i < hops.length; i++) {
+    const span = hops[i]!;
+    const apex = GAME.GRENADE.BOUNCE_DECAY ** i;
+    if (kk <= start + span || i === hops.length - 1) {
+      const local = Math.max(0, Math.min(1, (kk - start) / span));
+      return { d: Math.min(1, dist + span * local), y: apex * Math.sin(Math.PI * local) };
+    }
+    start += span;
+    dist += span;
+  }
+  return { d: 1, y: 0 };
 }
 
 /** Splash damage: `center` at 0 m falling linearly to `edge` at `radius`; 0 beyond. */

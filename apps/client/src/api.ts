@@ -24,7 +24,7 @@ export async function listRooms(near?: LatLon | null): Promise<RoomInfo[]> {
   return (await r.json()) as RoomInfo[];
 }
 
-export async function createRoom(body: { name: string; mode: GameMode; origin: LatLon; radiusM: number; doom?: boolean }): Promise<RoomInfo> {
+export async function createRoom(body: { name: string; mode: GameMode; origin: LatLon; radiusM: number }): Promise<RoomInfo> {
   const r = await fetch(`${apiBase()}/api/rooms`, {
     method: "POST",
     headers: { "content-type": "application/json" },

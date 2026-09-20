@@ -9,7 +9,7 @@ export class RoomManager {
     private now: () => number = Date.now,
   ) {}
 
-  create(opts: { name: string; mode: GameMode; origin: LatLon; radiusM: number; doom?: boolean }): Room {
+  create(opts: { name: string; mode: GameMode; origin: LatLon; radiusM: number }): Room {
     let id = shortCode(4);
     while (this.rooms.has(id)) id = shortCode(4);
     const room = new Room({ id, ...opts }, { onRoundEnd: this.onRoundEnd }, this.now);

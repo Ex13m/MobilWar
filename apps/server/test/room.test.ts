@@ -203,7 +203,8 @@ describe("Room", () => {
     const far = destination(origin, 0, 50);
     room.updatePosition(pb, far.lat, far.lon, 5, 180);
     // Pick a weapon that is slow enough for the delay to be unambiguous.
-    const slow = WEAPON_CATALOG.blaster.filter((w) => w.speedMps < 200).sort((a, b) => a.speedMps - b.speedMps)[0]!;
+    // Slow, but with the reach to cover the 50 m — the two are unrelated in the catalog.
+    const slow = WEAPON_CATALOG.blaster.filter((w) => w.speedMps < 200 && w.rangeM >= 55).sort((a, b) => a.speedMps - b.speedMps)[0]!;
     expect(room.equip(pa, "blaster", slow.id)).toBe(true);
     room.selectWeapon(pa, "blaster");
     room.shoot(pa, 0, "blaster");
@@ -508,14 +509,53 @@ describe("Room", () => {
     advance(1);
   });
 
-  it("pickups spawn over time inside the zone", () => {
+  it("items sit at fixed points and come back on their own clock", () => {
     const { room, advance, startPlaying } = setup();
     startPlaying();
-    advance(GAME.PICKUP_INTERVAL_MS * 0.3 + 1);
     room.tick();
-    const pk = [...room.objects.values()].filter((o) => o.team === null);
-    expect(pk.length).toBe(1);
-    expect(Math.hypot(pk[0]!.x, pk[0]!.z)).toBeLessThanOrEqual(room.radiusM * 0.8 + 0.01);
+    const small = [...room.objects.values()].filter((o) => o.team === null);
+    // The small stuff is on the lawn from the start: a medkit and a crate of ammo per half.
+    expect(small.filter((o) => o.kind === "medkit").length).toBe(2);
+    expect(small.filter((o) => o.kind === "ammo").length).toBe(2);
+    expect(small.some((o) => o.kind === "overcharge")).toBe(false);
+    for (const o of small) expect(Math.hypot(o.x, o.z)).toBeLessThanOrEqual(room.radiusM * 0.8 + 0.01);
+
+    // The shields make you wait, and the overcharge waits longest of all.
+    advance(20_001);
+    room.tick();
+    expect([...room.objects.values()].filter((o) => o.kind === "shield").length).toBe(2);
+    expect([...room.objects.values()].some((o) => o.kind === "overcharge")).toBe(false);
+    advance(25_001);
+    room.tick();
+    const quad = [...room.objects.values()].filter((o) => o.kind === "overcharge");
+    expect(quad.length).toBe(1);
+    expect(Math.hypot(quad[0]!.x, quad[0]!.z)).toBe(0);
+  });
+
+  it("a taken item comes back at the same point, after a call-out", () => {
+    const { room, a, pa, advance, startPlaying } = setup();
+    startPlaying();
+    room.tick();
+    const mk = [...room.objects.values()].find((o) => o.kind === "medkit")!;
+    const at = { x: mk.x, z: mk.z };
+    pa.hp = 10;
+    const here = destination(origin, (Math.atan2(at.x, -at.z) * 180) / Math.PI, Math.hypot(at.x, at.z));
+    room.updatePosition(pa, here.lat, here.lon, 3, 0);
+    room.tick();
+    expect(room.objects.has(mk.id)).toBe(false);
+    expect(pa.hp).toBeGreaterThan(10);
+    advance(GAME.ITEMS.RESPAWN_MS.medkit + 100);
+    room.tick();
+    const back = [...room.objects.values()].find((o) => o.kind === "medkit" && Math.hypot(o.x - at.x, o.z - at.z) < 0.01);
+    expect(back, "the medkit is back at its own point").toBeTruthy();
+
+    // The big items announce themselves before they return.
+    const sh = [...room.objects.values()].find((o) => o.kind === "shield")!;
+    room.objects.delete(sh.id);
+    room.tick();
+    advance(GAME.ITEMS.RESPAWN_MS.shield - GAME.ITEMS.WARN_MS + 100);
+    room.tick();
+    expect(a.inbox.some((m) => m.type === "event" && m.kind === "pickup_soon" && (m.data as { kind?: string })?.kind === "shield")).toBe(true);
   });
 
   it("spawn protection blocks damage", () => {
@@ -728,94 +768,5 @@ describe("Room", () => {
     advance(400);
     room.tick();
     expect(pb.alive).toBe(false);
-  });
-});
-
-describe("Doom-режим", () => {
-  function doomSetup() {
-    let now = 1_000_000;
-    const room = new Room({ id: "D", name: "doom", mode: "tdm", origin, radiusM: 150 }, {}, () => now);
-    const a = mkClient("a");
-    const b = mkClient("b");
-    const pa = room.join(a, { nick: "A", avatar: "scout", playMode: "ar", deviceId: "da", team: "red" });
-    const pb = room.join(b, { nick: "B", avatar: "heavy", playMode: "ar", deviceId: "db", team: "blue" });
-    const advance = (ms: number) => {
-      now += ms;
-    };
-    room.start();
-    advance(10_001);
-    room.tick();
-    room.updatePosition(pa, origin.lat, origin.lon, 5, 0);
-    const north = destination(origin, 0, 20);
-    room.updatePosition(pb, north.lat, north.lon, 5, 180);
-    return { room, a, b, pa, pb, advance };
-  }
-
-  it("is off by default and on when the room asks for it", () => {
-    expect(new Room({ name: "x", mode: "tdm", origin, radiusM: 100 }).doom).toBe(false);
-    expect(new Room({ name: "x", mode: "tdm", origin, radiusM: 100, doom: true }).doom).toBe(true);
-    expect(new Room({ name: "x", mode: "tdm", origin, radiusM: 100, doom: true }).info().doom).toBe(true);
-  });
-
-  it("rolls damage on dice: the same shot lands at half, full and half again", () => {
-    const rolls = [0, 0.5, 0.99];
-    const got: number[] = [];
-    for (const r of rolls) {
-      const { room, pa, pb, advance } = doomSetup();
-      room.doom = true;
-      room.setRngForTest(() => r);
-      const before = pb.hp;
-      room.shoot(pa, 0);
-      advance(GAME.RIFLE_COOLDOWN_MS + 1);
-      room.tick();
-      got.push(before - pb.hp);
-    }
-    const [low, base, high] = got as [number, number, number];
-    expect(base).toBeGreaterThan(0);
-    expect(low).toBeLessThan(base);
-    expect(high).toBeGreaterThan(base);
-    // mean of the three rolls stays at the base damage
-    expect(Math.round((low + base + high) / 3)).toBe(base);
-  });
-
-  it("ignores elevation: a shot into the sky still lands", () => {
-    const { room, pa, pb, advance } = doomSetup();
-    room.doom = true;
-    room.setRngForTest(() => 0.5);
-    const before = pb.hp;
-    room.shoot(pa, 0, "blaster", { pitch: GAME.VERT_HALF_ANGLE_DEG + 40 });
-    advance(GAME.RIFLE_COOLDOWN_MS + 1);
-    room.tick();
-    expect(pb.hp).toBeLessThan(before);
-  });
-
-  it("staggers the victim: it cannot fire for PAIN_MS", () => {
-    const { room, pa, pb, b, advance } = doomSetup();
-    room.doom = true;
-    room.setRngForTest(() => 0);
-    room.shoot(pa, 0);
-    advance(GAME.RIFLE_COOLDOWN_MS + 1);
-    room.tick();
-    expect(b.inbox.some((m) => m.type === "event" && m.kind === "pain")).toBe(true);
-    const hpBefore = pa.hp;
-    room.shoot(pb, 180); // staggered: nothing leaves the barrel
-    advance(GAME.RIFLE_COOLDOWN_MS + 1);
-    room.tick();
-    expect(pa.hp).toBe(hpBefore);
-    advance(GAME.DOOM.PAIN_MS + 50);
-    room.shoot(pb, 180);
-    advance(GAME.RIFLE_COOLDOWN_MS + 1);
-    room.tick();
-    expect(pa.hp).toBeLessThan(hpBefore);
-  });
-
-  it("reloads without a timer", () => {
-    const { room, pa } = doomSetup();
-    room.doom = true;
-    pa.mag.blaster = 0;
-    room.reload(pa, "blaster");
-    expect(pa.reloadUntil).toBe(room.nowForTest());
-    room.tick();
-    expect(pa.mag.blaster).toBeGreaterThan(0);
   });
 });

@@ -147,7 +147,10 @@ export class GameAudio {
     o.type = type;
     o.frequency.setValueAtTime(freq, t);
     if (sweepTo) o.frequency.exponentialRampToValueAtTime(Math.max(20, sweepTo), t + dur);
-    g.gain.setValueAtTime(gain, t);
+    // A gain that starts at full value is a step, and a step on a phone speaker
+    // is a click. Four milliseconds of attack removes it and changes nothing else.
+    g.gain.setValueAtTime(0.0001, t);
+    g.gain.exponentialRampToValueAtTime(Math.max(0.001, gain), t + 0.004);
     g.gain.exponentialRampToValueAtTime(0.001, t + dur);
     o.connect(g);
     g.connect(dest ?? this.master);
@@ -191,42 +194,26 @@ export class GameAudio {
   }
 
   /**
-   * A short accent layered under the sample that gives each catalog variant its
-   * own signature: 30 weapons per slot share three base recordings, so without
-   * this they all read as the same gun.
+   * The layer under the recorded shot. It used to be a square/saw/triangle blip,
+   * which is a chiptune beep sitting on top of a cinematic recording — that is
+   * what made every shot sound wrong. A shot is a transient plus a body: a short
+   * filtered noise click and one sine thump, both of which a phone speaker can
+   * actually reproduce.
    */
-  private accent(h: number, weapon: "pistol" | "blaster" | "sniper" | "rocket"): void {
-    const k = Math.floor(h * 6);
-    const base = weapon === "rocket" ? 70 : weapon === "sniper" ? 110 : weapon === "pistol" ? 380 : 190;
-    switch (k) {
-      case 0:
-        this.osc(base * 2.4, 0.045, "square", 0.07, base * 0.7);
-        break;
-      case 1:
-        this.noise(0.08, 0.16, 7200, 900);
-        break;
-      case 2:
-        this.osc(base * 0.8, 0.12, "sawtooth", 0.1, base * 0.35);
-        break;
-      case 3:
-        this.osc(base * 3.1, 0.03, "triangle", 0.06);
-        this.noise(0.05, 0.1, 9000, 2000);
-        break;
-      case 4:
-        this.osc(base * 1.5, 0.07, "sine", 0.12, base * 2.2);
-        break;
-      default:
-        this.noise(0.12, 0.1, 3200, 400);
-    }
+  private punch(h: number, weapon: "pistol" | "blaster" | "sniper" | "rocket"): void {
+    const low = weapon === "rocket" ? 58 : weapon === "sniper" ? 76 : weapon === "pistol" ? 150 : 98;
+    const light = weapon === "pistol";
+    this.noise(0.03 + h * 0.025, light ? 0.09 : 0.15, light ? 9000 : 6000, 1100);
+    this.osc(low * (0.9 + h * 0.25), weapon === "rocket" ? 0.2 : light ? 0.08 : 0.13, "sine", light ? 0.1 : 0.18, low * 0.55);
   }
 
   shot(weapon: "pistol" | "blaster" | "sniper" | "rocket", pitch?: number, weaponId?: string): void {
     const r = (base: number) => (pitch ? base * (pitch / (weapon === "rocket" ? 0.55 : weapon === "pistol" ? 1.5 : weapon === "sniper" ? 0.6 : 1.15)) : base);
     // Generated cinematic set: pitch scales lightly around 1.0 so variants still differ.
     const h = GameAudio.idHash(weaponId);
-    // Spread the playback rate much wider than the old ±20 %: with three base
-    // recordings per slot this is what separates one variant from the next.
-    const v = Math.max(0.68, Math.min(1.42, (pitch ? 0.8 + 0.25 * pitch : 1) * (0.82 + h * 0.38)));
+    // Variants still differ, but inside a range where a recording still sounds
+    // like itself: below ~0.85 a clip turns into mud, above ~1.15 into a toy.
+    const v = Math.max(0.86, Math.min(1.14, (pitch ? 0.94 + 0.06 * pitch : 1) * (0.94 + h * 0.13)));
     this.flip = !this.flip;
     // Each slot draws from a small pool; the id picks the pool entry, so the
     // same weapon always fires the same recording.
@@ -257,38 +244,40 @@ export class GameAudio {
     const heavy = weapon === "sniper" || weapon === "rocket";
     if (
       this.playFirst(ids, {
-        gain: heavy ? 1 : 0.85,
+        gain: heavy ? 0.95 : 0.8,
         rate: v,
-        reverb: weapon === "sniper" ? 0.8 : 0.35,
-        tilt: (h - 0.5) * 1.6,
-        body: (0.5 - h) * 1.2,
+        // A shot a metre from your face is not a cathedral: the long tail was
+        // most of the "strange" in the old mix.
+        reverb: weapon === "sniper" ? 0.45 : 0.18,
+        tilt: (h - 0.5) * 0.7,
+        body: (0.5 - h) * 0.6,
       })
     ) {
-      this.accent(h, weapon);
+      this.punch(h, weapon);
       this.vibrate(weapon === "rocket" ? 40 : weapon === "sniper" ? 35 : 12);
       return;
     }
     switch (weapon) {
       case "rocket":
-        this.play("blaster", { gain: 0.9, rate: r(0.55), reverb: 0.7 });
-        this.noise(0.5, 0.6, 3000, 300);
-        this.osc(90, 0.35, "sawtooth", 0.35, 40);
+        this.play("blaster", { gain: 0.9, rate: r(0.55), reverb: 0.4 });
+        this.noise(0.45, 0.5, 3000, 300);
+        this.punch(h, "rocket");
         this.vibrate(40);
         break;
       case "pistol":
-        this.play("laser1", { gain: 0.6, rate: r(1.5), reverb: 0.3 });
-        this.osc(900, 0.05, "square", 0.08, 300);
+        this.play("laser1", { gain: 0.6, rate: r(1.5), reverb: 0.25 });
+        this.punch(h, "pistol");
         this.vibrate(10);
         break;
       case "sniper":
-        this.play("zap", { gain: 1, rate: r(0.6), reverb: 0.9 });
-        this.noise(0.25, 0.7, 5000, 400);
-        this.osc(50, 0.5, "sine", 0.7, 30);
+        this.play("zap", { gain: 0.95, rate: r(0.6), reverb: 0.5 });
+        this.noise(0.22, 0.55, 5000, 400);
+        this.osc(52, 0.42, "sine", 0.55, 30);
         this.vibrate(35);
         break;
       default:
-        this.play("laser4", { gain: 0.7, rate: r(1.15), reverb: 0.4 });
-        this.osc(140, 0.06, "square", 0.15, 60);
+        this.play("laser4", { gain: 0.7, rate: r(1.15), reverb: 0.25 });
+        this.punch(h, "blaster");
         this.vibrate(12);
     }
   }
@@ -349,11 +338,11 @@ export class GameAudio {
     this.osc(110, 0.3, "sawtooth", 0.35, 45);
     this.vibrate(dmg >= 40 ? [120, 40, 120] : [60, 30, 60]);
   }
-  /** Doom-режим stagger: the grunt of a pain state, plus a long buzz. */
-  pain(dmg: number): void {
-    if (!this.playFirst(["g_hit_body"], { gain: 1, rate: 0.75 })) this.osc(90, 0.35, "square", 0.4, 40);
-    this.vibrate(dmg >= 40 ? [180, 50, 120] : [110, 40, 80]);
+  /** A grenade striking the ground: a short, dry knock, positioned in the world. */
+  grenadeBounce(rel?: { x: number; z: number }, dist = 5): void {
+    if (!this.playFirst(["g_hit_metal"], { gain: 0.5, rate: 1.25, rel, dist, reverb: 0.15 })) this.osc(180, 0.07, "sine", 0.12, 90);
   }
+
   shieldHit(): void {
     if (!this.playFirst(["g_hit_shield"], { gain: 0.8 })) this.play("zap", { gain: 0.6, rate: 1.3 });
     this.vibrate(30);

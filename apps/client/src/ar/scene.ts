@@ -378,12 +378,21 @@ export class ArScene {
       seenR.add(pr.id);
       let m = this.rockets.get(pr.id);
       if (!m) {
-        m = this.buildRocket();
+        m = pr.kind === "grenade" ? this.buildGrenade() : this.buildRocket();
         this.world.add(m);
         this.rockets.set(pr.id, m);
       }
       m.position.set(pr.rx, pr.y, pr.rz);
       m.rotation.y = -pr.heading * DEG;
+      if (pr.kind === "grenade") {
+        // A grenade is not a rocket: no exhaust plume, it tumbles and it bangs
+        // off the ground on every bounce.
+        m.rotation.x += 0.35;
+        const prev = this.lastProjY.get(pr.id) ?? pr.y;
+        if (prev > 0.35 && pr.y <= 0.35) this.onGrenadeBounce?.(pr.x, pr.z);
+        this.lastProjY.set(pr.id, pr.y);
+        continue;
+      }
       const back = new THREE.Vector3(-Math.sin(pr.heading * DEG), 0, Math.cos(pr.heading * DEG));
       this.fx.exhaust(m.position.clone().add(back.clone().multiplyScalar(0.4)), back);
     }
@@ -391,6 +400,7 @@ export class ArScene {
       if (!seenR.has(id)) {
         this.world.remove(m);
         this.rockets.delete(id);
+        this.lastProjY.delete(id);
       }
     }
 
@@ -492,6 +502,22 @@ export class ArScene {
       }
     }
     return holder;
+  }
+
+  /** Height of each projectile on the previous frame, to catch a bounce. */
+  private lastProjY = new Map<string, number>();
+  /** Set by the game: a grenade has just struck the ground at x/z. */
+  onGrenadeBounce: ((x: number, z: number) => void) | null = null;
+
+  private buildGrenade(): THREE.Object3D {
+    const g = new THREE.Group();
+    const body = new THREE.Mesh(new THREE.IcosahedronGeometry(0.16, 0), new THREE.MeshStandardMaterial({ color: 0x2a3340, roughness: 0.6, metalness: 0.4, emissive: new THREE.Color(0x67e8f9).multiplyScalar(0.35) }));
+    g.add(body);
+    const glow = new THREE.Sprite(new THREE.SpriteMaterial({ map: sprite("flare"), color: new THREE.Color(0.6, 2.4, 2.8), transparent: true, blending: THREE.AdditiveBlending, depthWrite: false, toneMapped: false }));
+    glow.scale.set(0.5, 0.5, 1);
+    glow.layers.enable(BLOOM_LAYER);
+    g.add(glow);
+    return g;
   }
 
   private buildRocket(): THREE.Object3D {

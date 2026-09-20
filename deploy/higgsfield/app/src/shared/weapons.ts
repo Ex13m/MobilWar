@@ -39,10 +39,16 @@ export type Trait =
 export type AmmoKind = "ballistic" | "energy" | "plasma" | "rocket" | "rail";
 
 /** Muzzle velocity in m/s by class. `rail` is effectively instant. */
+/**
+ * Quake's rule: a projectile you can see is a projectile you have to lead.
+ * Bullets stay effectively hitscan and the rail slug is instant, but the energy
+ * and plasma classes fly slowly enough that a player walking across your sight
+ * at 20 m has to be aimed ahead of, not at.
+ */
 export const AMMO_SPEED: Record<AmmoKind, number> = {
   ballistic: 400,
-  energy: 140,
-  plasma: 90,
+  energy: 75,
+  plasma: 45,
   rocket: 24,
   rail: 100000,
 };

@@ -1,6 +1,6 @@
 /* Minimal offline shell cache. Game logic needs network; this only makes the PWA installable
    and lets the lobby load without connectivity. */
-const CACHE = "mobilwar-20260920111548";
+const CACHE = "mobilwar-20260920115359";
 const SHELL = ["/", "/index.html", "/manifest.webmanifest", "/icon.svg"];
 self.addEventListener("install", (e) => {
   e.waitUntil(caches.open(CACHE).then((c) => c.addAll(SHELL)).catch(() => {}));

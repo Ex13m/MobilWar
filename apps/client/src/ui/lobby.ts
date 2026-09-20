@@ -71,8 +71,6 @@ export function showLobby(root: HTMLElement, profile: Profile, getFix: () => { l
           <select id="rmode">${(Object.keys(MODE_NAMES) as GameMode[]).map((m) => `<option value="${m}">${MODE_NAMES[m]}</option>`).join("")}</select>
           <label>Радиус зоны, м (центр — там, где ты стоишь)</label>
           <input id="rradius" type="number" min="20" max="500" value="${GAME.DEFAULT_ZONE_RADIUS_M}" />
-          <label class="row-check"><input id="rdoom" type="checkbox" /> Дум-режим — правила 1993</label>
-          <p class="hint">Урон кубиками, без падения на дистанции, попадание сбивает прицел, высота не важна, перезарядка мгновенная, своя ракета бьёт в полную силу.</p>
           <div style="height:12px"></div>
           <button class="btn secondary block" id="create">Создать и войти</button>
           <p class="hint" style="margin-top:8px">Судья: открой <b>/referee.html?room=КОД</b> на планшете.</p>
@@ -150,7 +148,6 @@ export function showLobby(root: HTMLElement, profile: Profile, getFix: () => { l
         mode: $<HTMLSelectElement>("#rmode").value as GameMode,
         origin: fix,
         radiusM: Number($<HTMLInputElement>("#rradius").value) || GAME.DEFAULT_ZONE_RADIUS_M,
-        doom: $<HTMLInputElement>("#rdoom").checked,
       })
         .then((room) => go(room.id))
         .catch((e: Error) => (err.textContent = `Не удалось создать зону: ${e.message}`));
@@ -166,7 +163,7 @@ export function showLobby(root: HTMLElement, profile: Profile, getFix: () => { l
         .slice(0, 8)
         .map(
           (r) =>
-            `<div class="room" data-id="${r.id}"><div><b>${esc(r.name)}</b><br><small>${MODE_NAMES[r.mode]}${r.doom ? " · DOOM" : ""} · ${r.playerCount} игр. · ${r.phase === "playing" ? "идёт бой" : "лобби"}</small></div><b>${r.id}</b></div>`,
+            `<div class="room" data-id="${r.id}"><div><b>${esc(r.name)}</b><br><small>${MODE_NAMES[r.mode]} · ${r.playerCount} игр. · ${r.phase === "playing" ? "идёт бой" : "лобби"}</small></div><b>${r.id}</b></div>`,
         )
         .join("");
     }

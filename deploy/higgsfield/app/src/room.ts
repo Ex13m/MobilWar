@@ -38,8 +38,6 @@ interface RoomConfig {
   mode: GameMode;
   origin: LatLon;
   radiusM: number;
-  /** Doom-режим: the 1993 ruleset (GAME.DOOM). */
-  doom?: boolean;
   createdAt: number;
 }
 
@@ -111,7 +109,7 @@ export class Room extends DurableObject<Env> {
       await this.ctx.storage.put("config", cfg);
     }
     this.config = cfg;
-    this.game = new GameRoom({ id: cfg.id, name: cfg.name, mode: cfg.mode, origin: cfg.origin, radiusM: cfg.radiusM, doom: cfg.doom === true });
+    this.game = new GameRoom({ id: cfg.id, name: cfg.name, mode: cfg.mode, origin: cfg.origin, radiusM: cfg.radiusM });
     await this.ctx.storage.setAlarm(Date.now() + TICK_MS);
     return this.game;
   }
@@ -272,10 +270,6 @@ export class Room extends DurableObject<Env> {
           case "set_zone":
             game.setZone(msg.origin, msg.radiusM, msg.polygon);
             break;
-          case "set_doom":
-            game.doom = msg.doom === true;
-            game.reset();
-            break;
           case "kick": {
             const victim = msg.playerId ? game.players.get(msg.playerId) : undefined;
             if (victim) {
@@ -359,7 +353,7 @@ export class Room extends DurableObject<Env> {
     }
 
     if (url.pathname === "/api/rooms" && request.method === "POST") {
-      let m: { name?: string; mode?: GameMode; origin?: LatLon; radiusM?: number; doom?: boolean };
+      let m: { name?: string; mode?: GameMode; origin?: LatLon; radiusM?: number };
       try {
         m = (await request.json()) as typeof m;
       } catch {
@@ -376,7 +370,6 @@ export class Room extends DurableObject<Env> {
         mode: m.mode ?? "tdm",
         origin: { lat: m.origin.lat, lon: m.origin.lon },
         radiusM: Math.min(1000, Math.max(20, Number(m.radiusM) || GAME.DEFAULT_ZONE_RADIUS_M)),
-        doom: m.doom === true,
         createdAt: now,
       };
       const info: RegistryEntry = {
@@ -385,7 +378,6 @@ export class Room extends DurableObject<Env> {
         mode: cfg.mode,
         origin: cfg.origin,
         radiusM: cfg.radiusM,
-        doom: cfg.doom === true,
         phase: "lobby",
         phaseEndsAt: 0,
         score: { red: 0, blue: 0 },

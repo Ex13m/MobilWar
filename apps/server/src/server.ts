@@ -61,14 +61,13 @@ export function createApp(opts: { dbPath?: string } = {}) {
       req.on("data", (c) => (body += c));
       req.on("end", () => {
         try {
-          const m = JSON.parse(body || "{}") as { name?: string; mode?: string; origin?: { lat: number; lon: number }; radiusM?: number; doom?: boolean };
+          const m = JSON.parse(body || "{}") as { name?: string; mode?: string; origin?: { lat: number; lon: number }; radiusM?: number };
           if (!m.origin || !Number.isFinite(m.origin.lat) || !Number.isFinite(m.origin.lon)) throw new Error("bad_origin");
           const room = rooms.create({
             name: String(m.name ?? "Зона").slice(0, 32) || "Зона",
             mode: (m.mode as import("@mobilwar/shared").GameMode) ?? "tdm",
             origin: { lat: m.origin.lat, lon: m.origin.lon },
             radiusM: Number(m.radiusM) || GAME.DEFAULT_ZONE_RADIUS_M,
-            doom: m.doom === true,
           });
           log.info("room created (http)", room.id, room.name, room.mode);
           res.writeHead(201, { "content-type": "application/json" });
@@ -166,7 +165,6 @@ export function createApp(opts: { dbPath?: string } = {}) {
           mode: msg.mode ?? "tdm",
           origin: { lat: msg.origin.lat, lon: msg.origin.lon },
           radiusM: Number(msg.radiusM) || GAME.DEFAULT_ZONE_RADIUS_M,
-          doom: msg.doom === true,
         });
         log.info("room created", room.id, room.name, room.mode);
         conn.send({ type: "room_created", room: room.info() });
@@ -290,10 +288,6 @@ export function createApp(opts: { dbPath?: string } = {}) {
             break;
           case "set_zone":
             room.setZone(msg.origin, msg.radiusM, msg.polygon);
-            break;
-          case "set_doom":
-            room.doom = msg.doom === true;
-            room.reset();
             break;
           case "kick": {
             const victim = msg.playerId ? room.players.get(msg.playerId) : undefined;

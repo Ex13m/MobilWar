@@ -79,6 +79,18 @@ export const GAME = {
   PICKUP_MAX: 4,
   PICKUP_RADIUS_M: 3,
   PICKUP_TTL_MS: 90000,
+  /**
+   * Quake's map control: items do not appear at random, they sit at fixed points
+   * on fixed timers, so a team that knows the clock owns the lawn. The big two
+   * are called out before they come back, which is what "timing the mega" is.
+   */
+  ITEMS: {
+    /** Respawn after being taken, ms, per kind. */
+    RESPAWN_MS: { overcharge: 90000, shield: 45000, medkit: 35000, ammo: 25000 },
+    /** How long before a big item returns the call-out goes out, ms. */
+    WARN_MS: 10000,
+    WARN_KINDS: ["overcharge", "shield"],
+  },
   /** Drone: placed object that orbits and harasses enemies. */
   DRONE: {
     RANGE_M: 18,
@@ -148,6 +160,15 @@ export const GAME = {
     ROLL_M: 1,
     /** Apex of the throw arc, m (visual only; the blast point is on the ground). */
     ARC_APEX_M: 4,
+    /**
+     * Quake's grenade launcher: the grenade does not stop where it lands, it
+     * bounces and rolls out its fuse. `HOPS` are the fractions of the fuse each
+     * bounce takes, `BOUNCE_DECAY` is how much apex a bounce keeps, and the
+     * whole thing is still moving for `FLIGHT_FRAC` of the fuse.
+     */
+    HOPS: [0.5, 0.28, 0.14, 0.08],
+    BOUNCE_DECAY: 0.45,
+    FLIGHT_FRAC: 0.8,
     /** Minimum gap between two throws, ms. */
     COOLDOWN_MS: 900,
     TYPES: {
@@ -189,20 +210,6 @@ export const GAME = {
   AUTOSTART_PLAYERS: 2,
   /** Grace period before the automatic countdown begins, ms. */
   AUTOSTART_DELAY_MS: 5000,
-  /**
-   * Doom-режим: the 1993 ruleset, switched on per room. Damage is rolled on
-   * dice instead of computed, there is no falloff, a hit staggers the victim,
-   * the splash of your own rocket hurts you in full, elevation is ignored
-   * (Doom actors are infinitely tall) and magazines refill without a timer.
-   */
-  DOOM: {
-    /** damage = round(base / 2) * (1..DICE); mean stays at the base value. */
-    DICE: 3,
-    /** Stagger after a hit: the victim cannot fire for this long, ms. */
-    PAIN_MS: 260,
-    /** Chance of the stagger; a hit that does not stagger still hurts. */
-    PAIN_CHANCE: 0.65,
-  },
   /** Client interpolation buffer (ms). */
   INTERP_DELAY_MS: 250,
 } as const;
