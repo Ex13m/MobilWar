@@ -189,6 +189,20 @@ export const GAME = {
   AUTOSTART_PLAYERS: 2,
   /** Grace period before the automatic countdown begins, ms. */
   AUTOSTART_DELAY_MS: 5000,
+  /**
+   * Doom-режим: the 1993 ruleset, switched on per room. Damage is rolled on
+   * dice instead of computed, there is no falloff, a hit staggers the victim,
+   * the splash of your own rocket hurts you in full, elevation is ignored
+   * (Doom actors are infinitely tall) and magazines refill without a timer.
+   */
+  DOOM: {
+    /** damage = round(base / 2) * (1..DICE); mean stays at the base value. */
+    DICE: 3,
+    /** Stagger after a hit: the victim cannot fire for this long, ms. */
+    PAIN_MS: 260,
+    /** Chance of the stagger; a hit that does not stagger still hurts. */
+    PAIN_CHANCE: 0.65,
+  },
   /** Client interpolation buffer (ms). */
   INTERP_DELAY_MS: 250,
 } as const;

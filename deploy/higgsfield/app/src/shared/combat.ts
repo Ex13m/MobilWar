@@ -109,6 +109,16 @@ export function rayEnd(from: Vec2, heading: number, len: number): Vec2 {
   return { x: from.x + Math.sin(h) * len, z: from.z - Math.cos(h) * len };
 }
 
+/**
+ * Doom damage roll: the original engine never computed damage, it rolled it —
+ * the pistol is 5 * (1..3). `base` keeps the mean, so balance is unchanged and
+ * only the variance appears: half damage, base damage, half again.
+ */
+export function doomRoll(base: number, rnd: () => number): number {
+  const unit = Math.max(1, Math.round(base / 2));
+  return unit * (1 + Math.floor(rnd() * GAME.DOOM.DICE));
+}
+
 /** Splash damage: `center` at 0 m falling linearly to `edge` at `radius`; 0 beyond. */
 export function splashDamage(dist: number, radius: number, center: number, edge: number): number {
   if (dist >= radius) return 0;

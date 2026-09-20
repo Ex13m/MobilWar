@@ -46,6 +46,9 @@ export class Game {
   private zoomed = false;
   private reloadStart = 0;
   private reloadEnd = 0;
+  /** Doom-режим: the trigger is dead while the stagger from a hit lasts. */
+  private painUntil = 0;
+  private doomAnnounced = false;
   private lastGrenadeAt = 0;
   private lastChargeTone = 0;
   private lastFixSentT = 0;
@@ -76,7 +79,7 @@ export class Game {
       const video = root.querySelector<HTMLVideoElement>("#video")!;
       const canvas = root.querySelector<HTMLCanvasElement>("#gl")!;
       this.scene = new ArScene(canvas);
-      (window as unknown as { __mw?: unknown }).__mw = { scene: this.scene, world: this.world };
+      (window as unknown as { __mw?: unknown }).__mw = { scene: this.scene, world: this.world, hud: this.hud, event: (k: string, d?: Record<string, unknown>) => this.onEvent(k, d) };
       this.hud = new Hud(root, {
         onFire: () => this.trigger(),
         onFireEnd: () => this.triggerEnd(),
@@ -287,6 +290,7 @@ export class Game {
     if (now - this.lastShotAt[w] < W.COOLDOWN_MS) return;
     if (!this.world.me.alive) return;
     if (this.reloadEnd > now) return;
+    if (this.painUntil > now) return;
     const me = this.world.myPlayer();
     const rounds = w === "rocket" ? this.world.me.ammo : (me?.mag[w] ?? 1);
     if (rounds <= 0) {
@@ -564,6 +568,18 @@ export class Game {
       case "empty":
         this.o.audio.empty();
         return;
+      case "pain": {
+        // Doom-режим: a hit staggers. The shot is locked out for the same time
+        // the server locks it, so the screen and the trigger agree.
+        const ms = Number(data?.ms ?? 260);
+        const dmg = Number(data?.damage ?? 10);
+        this.painUntil = performance.now() + ms;
+        this.hud?.flash(Math.min(0.85, 0.35 + dmg / 100));
+        this.hud?.setPain(ms);
+        this.scene?.addShake(1.2);
+        this.o.audio.pain(dmg);
+        return;
+      }
       case "burn":
         if (data?.id === this.world.myId) {
           this.hud?.fx("burn", Number(data?.s ?? 3) * 1000);
@@ -649,6 +665,10 @@ export class Game {
       this.scene.render();
       const room = this.world.room;
       if (room) {
+        if (room.doom && !this.doomAnnounced) {
+          this.doomAnnounced = true;
+          this.hud.banner("ДУМ-РЕЖИМ · правила 1993", "warn", 2600);
+        }
         this.hud.setScore(room.score.red, room.score.blue);
         this.hud.setTimer(room.phase === "playing" ? fmtTime(room.phaseEndsAt - serverNow) : room.phase === "countdown" ? "старт…" : room.phase === "ended" ? "конец" : "лобби");
       }

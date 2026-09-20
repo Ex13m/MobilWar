@@ -349,6 +349,11 @@ export class GameAudio {
     this.osc(110, 0.3, "sawtooth", 0.35, 45);
     this.vibrate(dmg >= 40 ? [120, 40, 120] : [60, 30, 60]);
   }
+  /** Doom-режим stagger: the grunt of a pain state, plus a long buzz. */
+  pain(dmg: number): void {
+    if (!this.playFirst(["g_hit_body"], { gain: 1, rate: 0.75 })) this.osc(90, 0.35, "square", 0.4, 40);
+    this.vibrate(dmg >= 40 ? [180, 50, 120] : [110, 40, 80]);
+  }
   shieldHit(): void {
     if (!this.playFirst(["g_hit_shield"], { gain: 0.8 })) this.play("zap", { gain: 0.6, rate: 1.3 });
     this.vibrate(30);

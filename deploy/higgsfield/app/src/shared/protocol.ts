@@ -111,6 +111,8 @@ export interface RoomInfo {
   mode: GameMode;
   origin: LatLon;
   radiusM: number;
+  /** Doom-режим: the 1993 ruleset (see GAME.DOOM). */
+  doom: boolean;
   /** Optional polygon geofence (overrides circle if present). */
   polygon?: LatLon[];
   phase: "lobby" | "countdown" | "playing" | "ended";
@@ -202,9 +204,10 @@ export interface PlaceObjectMsg {
 
 export interface RefereeCmdMsg {
   type: "ref";
-  cmd: "start" | "stop" | "reset" | "kick" | "set_mode" | "set_zone";
+  cmd: "start" | "stop" | "reset" | "kick" | "set_mode" | "set_zone" | "set_doom";
   playerId?: string;
   mode?: GameMode;
+  doom?: boolean;
   origin?: LatLon;
   radiusM?: number;
   polygon?: LatLon[];
@@ -221,6 +224,8 @@ export interface CreateRoomMsg {
   mode: GameMode;
   origin: LatLon;
   radiusM: number;
+  /** Doom-режим: the 1993 ruleset (see GAME.DOOM). */
+  doom?: boolean;
 }
 
 export interface ListRoomsMsg {
@@ -332,6 +337,7 @@ export interface EventMsg {
     | "respawn"
     | "reload"
     | "empty"
+    | "pain"
     | "burn"
     | "stun"
     | "emp"

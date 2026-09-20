@@ -3,6 +3,7 @@ import {
   TEAMS,
   checkPlausible,
   damageAtDistance,
+  doomRoll,
   destination,
   fromLocal,
   haversine,
@@ -82,6 +83,8 @@ export interface Player extends PlayerPublic {
   lockUntil: number;
   /** Burn: damage accumulator. */
   burnAcc: number;
+  /** Doom-режим: a hit staggers, and the victim cannot fire until this time. */
+  painUntil: number;
 }
 
 interface Turret extends WorldObject {
@@ -190,10 +193,12 @@ export class Room {
   }> = [];
   private lastPickupSpawn = 0;
   private lastTickAt = 0;
+  /** Doom-режим: the 1993 ruleset (GAME.DOOM), chosen when the room is made. */
+  doom = false;
   private rng = mulberry32(Date.now() & 0xffffffff);
 
   constructor(
-    opts: { id?: string; name: string; mode: GameMode; origin: LatLon; radiusM: number; polygon?: LatLon[] },
+    opts: { id?: string; name: string; mode: GameMode; origin: LatLon; radiusM: number; polygon?: LatLon[]; doom?: boolean },
     private events: RoomEvents = {},
     private now: () => number = Date.now,
   ) {
@@ -203,6 +208,7 @@ export class Room {
     this.origin = opts.origin;
     this.radiusM = Math.min(1000, Math.max(20, opts.radiusM));
     this.polygon = opts.polygon;
+    this.doom = opts.doom === true;
   }
 
   /* ---------------- info ---------------- */
@@ -214,6 +220,7 @@ export class Room {
       mode: this.mode,
       origin: this.origin,
       radiusM: this.radiusM,
+      doom: this.doom,
       polygon: this.polygon,
       phase: this.phase,
       phaseEndsAt: this.phaseEndsAt,
@@ -302,6 +309,7 @@ export class Room {
       heatAt: 0,
       lockUntil: 0,
       burnAcc: 0,
+      painUntil: 0,
     };
     p.mag = fullMags(p.loadout);
     p.grenades = fullGrenades();
@@ -398,7 +406,8 @@ export class Room {
     if (weapon === "rocket" && W.reserve === 0) return false; // heavy ammo comes from pickups
     if (p.mag[weapon] >= W.mag) return false;
     if (p.reserve[weapon] === 0) return false;
-    p.reloadUntil = t + W.reloadMs;
+    // Doom never reloaded: the magazine refills the moment it runs dry.
+    p.reloadUntil = t + (this.doom ? 0 : W.reloadMs);
     p.weapon = weapon;
     this.broadcast({ type: "event", kind: "reload", data: { id: p.id, weapon, ms: W.reloadMs } });
     return true;
@@ -438,7 +447,7 @@ export class Room {
     const W = this.def(p, weapon);
     this.settleReload(p, t);
     this.settleBloom(p, t);
-    if (p.reloadUntil > t || p.stunnedUntil > t || p.lockUntil > t) return;
+    if (p.reloadUntil > t || p.stunnedUntil > t || p.lockUntil > t || p.painUntil > t) return;
     if (t - p.lastShotByWeapon[weapon] < W.cooldownMs) return;
     if (p.mag[weapon] <= 0) {
       p.client.send({ type: "event", kind: "empty", data: { weapon } });
@@ -504,7 +513,9 @@ export class Room {
     for (let n = 0; n < rounds; n++) {
       // pellets scatter: jitter the aim inside the cone
       const jitter = W.pellets > 1 ? (this.rng() * 2 - 1) * W.cone * 0.8 : 0;
-      const hit = resolveShot({ x: p.x, z: p.z, acc: p.acc }, p.heading + jitter, targets, W.rangeM, cone, { pitch: aimPitch });
+      // Doom actors are infinitely tall: elevation is ignored, the shot lands
+      // wherever the horizontal line points.
+      const hit = resolveShot({ x: p.x, z: p.z, acc: p.acc }, p.heading + jitter, targets, W.rangeM, cone, this.doom ? {} : { pitch: aimPitch });
       if (!hit) continue;
       const tgt = this.players.get(hit.id) ?? this.objects.get(hit.id);
       if (!tgt) continue;
@@ -515,7 +526,9 @@ export class Room {
         this.damageObject(barrier, Math.round(W.damage / 2));
         continue;
       }
-      let dmg = charged ? W.chargedDamage : weapon === "sniper" ? W.damage : damageAtDistance(W.damage, hit.dist, W.rangeM);
+      // Doom has no range falloff and never computes damage — it rolls it.
+      const base = charged ? W.chargedDamage : weapon === "sniper" || this.doom ? W.damage : damageAtDistance(W.damage, hit.dist, W.rangeM);
+      let dmg = this.doom ? doomRoll(base, this.rng) : base;
       if (p.overchargeUntil > t && weapon !== "sniper") dmg *= GAME.OVERCHARGE_MULT;
       const victim = this.players.get(hit.id);
       if (victim && !this.isEnemy(p, victim)) {
@@ -562,6 +575,10 @@ export class Room {
   private applyHit(p: Player, victim: Player, dmg: number, weapon: KillWeapon, W: WeaponDef, t: number): void {
     const pierce = W.piercesShield;
     this.damagePlayer(victim, dmg, p, weapon, pierce);
+    if (this.doom && victim.alive && this.rng() < GAME.DOOM.PAIN_CHANCE) {
+      victim.painUntil = Math.max(victim.painUntil, t + GAME.DOOM.PAIN_MS);
+      victim.client.send({ type: "event", kind: "pain", data: { ms: GAME.DOOM.PAIN_MS, damage: dmg, from: p.id } });
+    }
     if (W.burnS > 0) {
       victim.burnUntil = Math.max(victim.burnUntil, t + W.burnS * 1000);
       this.broadcast({ type: "event", kind: "burn", data: { id: victim.id, s: W.burnS } });
@@ -776,6 +793,11 @@ export class Room {
   }
 
   /** Test seam: the room's clock. */
+  /** Test seam: a fixed roll makes the Doom dice deterministic. */
+  setRngForTest(fn: () => number): void {
+    this.rng = fn;
+  }
+
   nowForTest(): number {
     return this.now();
   }
@@ -892,7 +914,9 @@ export class Room {
         q.shield = 0;
         q.empUntil = Math.max(q.empUntil, t + GAME.GRENADE.TYPES.emp.disableMs);
       }
-      const dmg = splashDamage(d, W.splashM, q.id === pr.ownerId ? Math.round(W.damage / 2) : W.damage, W.damageEdge);
+      // Your own rocket hurts you in full in Doom — that is what a rocket jump is.
+      const selfDmg = this.doom ? W.damage : Math.round(W.damage / 2);
+      const dmg = splashDamage(d, W.splashM, q.id === pr.ownerId ? selfDmg : W.damage, W.damageEdge);
       if (dmg > 0) {
         victims.push({ id: q.id, damage: dmg });
         if (W.trait === "emp") q.shield = 0;
@@ -1050,6 +1074,7 @@ export class Room {
     p.heat = 0;
     p.lockUntil = 0;
     p.stunnedUntil = 0;
+    p.painUntil = 0;
     p.burnUntil = 0;
   }
 

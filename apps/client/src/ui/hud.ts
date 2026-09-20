@@ -385,6 +385,14 @@ export class Hud {
     this.el.querySelector(".crosshair")!.classList.toggle("locked", on);
   }
 
+  /** Doom-режим: the crosshair goes dead for the length of the stagger. */
+  setPain(ms: number): void {
+    const c = this.el.querySelector<HTMLElement>(".crosshair")!;
+    c.classList.add("pain");
+    window.clearTimeout(this.painTimer);
+    this.painTimer = window.setTimeout(() => c.classList.remove("pain"), ms);
+  }
+
   setCompass(h: number): void {
     const c = this.q(".compass");
     // Split so the bearing reads as an instrument. As one string the degree
@@ -412,6 +420,7 @@ export class Hud {
     b.hidden = false;
     if (ms > 0) this.bannerTimer = window.setTimeout(() => (b.hidden = true), ms);
   }
+  private painTimer = 0;
   flash(strength = 0.35): void {
     const f = this.q<HTMLElement>(".flash");
     f.style.setProperty("--f", String(strength));

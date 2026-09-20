@@ -730,3 +730,92 @@ describe("Room", () => {
     expect(pb.alive).toBe(false);
   });
 });
+
+describe("Doom-режим", () => {
+  function doomSetup() {
+    let now = 1_000_000;
+    const room = new Room({ id: "D", name: "doom", mode: "tdm", origin, radiusM: 150 }, {}, () => now);
+    const a = mkClient("a");
+    const b = mkClient("b");
+    const pa = room.join(a, { nick: "A", avatar: "scout", playMode: "ar", deviceId: "da", team: "red" });
+    const pb = room.join(b, { nick: "B", avatar: "heavy", playMode: "ar", deviceId: "db", team: "blue" });
+    const advance = (ms: number) => {
+      now += ms;
+    };
+    room.start();
+    advance(10_001);
+    room.tick();
+    room.updatePosition(pa, origin.lat, origin.lon, 5, 0);
+    const north = destination(origin, 0, 20);
+    room.updatePosition(pb, north.lat, north.lon, 5, 180);
+    return { room, a, b, pa, pb, advance };
+  }
+
+  it("is off by default and on when the room asks for it", () => {
+    expect(new Room({ name: "x", mode: "tdm", origin, radiusM: 100 }).doom).toBe(false);
+    expect(new Room({ name: "x", mode: "tdm", origin, radiusM: 100, doom: true }).doom).toBe(true);
+    expect(new Room({ name: "x", mode: "tdm", origin, radiusM: 100, doom: true }).info().doom).toBe(true);
+  });
+
+  it("rolls damage on dice: the same shot lands at half, full and half again", () => {
+    const rolls = [0, 0.5, 0.99];
+    const got: number[] = [];
+    for (const r of rolls) {
+      const { room, pa, pb, advance } = doomSetup();
+      room.doom = true;
+      room.setRngForTest(() => r);
+      const before = pb.hp;
+      room.shoot(pa, 0);
+      advance(GAME.RIFLE_COOLDOWN_MS + 1);
+      room.tick();
+      got.push(before - pb.hp);
+    }
+    const [low, base, high] = got as [number, number, number];
+    expect(base).toBeGreaterThan(0);
+    expect(low).toBeLessThan(base);
+    expect(high).toBeGreaterThan(base);
+    // mean of the three rolls stays at the base damage
+    expect(Math.round((low + base + high) / 3)).toBe(base);
+  });
+
+  it("ignores elevation: a shot into the sky still lands", () => {
+    const { room, pa, pb, advance } = doomSetup();
+    room.doom = true;
+    room.setRngForTest(() => 0.5);
+    const before = pb.hp;
+    room.shoot(pa, 0, "blaster", { pitch: GAME.VERT_HALF_ANGLE_DEG + 40 });
+    advance(GAME.RIFLE_COOLDOWN_MS + 1);
+    room.tick();
+    expect(pb.hp).toBeLessThan(before);
+  });
+
+  it("staggers the victim: it cannot fire for PAIN_MS", () => {
+    const { room, pa, pb, b, advance } = doomSetup();
+    room.doom = true;
+    room.setRngForTest(() => 0);
+    room.shoot(pa, 0);
+    advance(GAME.RIFLE_COOLDOWN_MS + 1);
+    room.tick();
+    expect(b.inbox.some((m) => m.type === "event" && m.kind === "pain")).toBe(true);
+    const hpBefore = pa.hp;
+    room.shoot(pb, 180); // staggered: nothing leaves the barrel
+    advance(GAME.RIFLE_COOLDOWN_MS + 1);
+    room.tick();
+    expect(pa.hp).toBe(hpBefore);
+    advance(GAME.DOOM.PAIN_MS + 50);
+    room.shoot(pb, 180);
+    advance(GAME.RIFLE_COOLDOWN_MS + 1);
+    room.tick();
+    expect(pa.hp).toBeLessThan(hpBefore);
+  });
+
+  it("reloads without a timer", () => {
+    const { room, pa } = doomSetup();
+    room.doom = true;
+    pa.mag.blaster = 0;
+    room.reload(pa, "blaster");
+    expect(pa.reloadUntil).toBe(room.nowForTest());
+    room.tick();
+    expect(pa.mag.blaster).toBeGreaterThan(0);
+  });
+});
