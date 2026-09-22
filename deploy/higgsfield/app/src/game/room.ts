@@ -117,6 +117,8 @@ interface ServerProjectile extends Projectile {
   z0?: number;
   /** Grenades: how long the throw itself takes, ms. */
   flightMs?: number;
+  /** Rockets: the aim elevation at launch, so the flight follows the crosshair. */
+  pitch?: number;
 }
 
 /** Full set of throwables, handed out on spawn and on respawn. */
@@ -694,6 +696,10 @@ export class Room {
       x: p.x,
       z: p.z,
       y: 1.4,
+      // A rocket used to fly dead flat at 1.4 m whatever the phone was pointing
+      // at — the one projectile that visibly ignored the crosshair. It now
+      // climbs or descends along the aim line.
+      pitch: Math.max(-45, Math.min(45, aimPitch ?? 0)),
       heading: p.heading,
       t0: t,
       lastT: t,
@@ -920,6 +926,12 @@ export class Room {
       pr.x = to.x;
       pr.z = to.z;
       pr.travelled += step;
+      // Height follows the aim line; a guided rocket settles onto the height of
+      // what it is chasing instead.
+      const climb = Math.tan(((pr.pitch ?? 0) * Math.PI) / 180) * pr.travelled;
+      const wantY = pr.lockedTargetId ? 1.2 : 1.4 + climb;
+      pr.y += (wantY - pr.y) * Math.min(1, dt * (pr.lockedTargetId ? 1.5 : 8));
+      if (pr.y < 0.4) pr.y = 0.4;
       // proximity fuse on enemies / enemy objects
       let fuse = false;
       for (const q of this.players.values()) {

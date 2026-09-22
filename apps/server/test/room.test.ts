@@ -815,3 +815,44 @@ describe("разрывные (flak)", () => {
     expect(pb.hp, "nobody is hurt by it").toBe(hp0);
   });
 });
+
+describe("ракета летит в прицел", () => {
+  it("climbs when the phone is tilted up and stays level when it is not", () => {
+    const heights = (pitch: number) => {
+      const { room, pa, advance, startPlaying } = setup();
+      startPlaying();
+      room.updatePosition(pa, origin.lat, origin.lon, 3, 0);
+      room.selectWeapon(pa, "rocket");
+      room.shoot(pa, 0, "rocket", { pitch });
+      const ys: number[] = [];
+      for (let i = 0; i < 12 && room.projectiles.size; i++) {
+        advance(120);
+        room.tick();
+        const pr = [...room.projectiles.values()][0];
+        if (pr) ys.push(pr.y);
+      }
+      return ys;
+    };
+    const level = heights(0);
+    const up = heights(25);
+    expect(level.length).toBeGreaterThan(3);
+    expect(up.length).toBeGreaterThan(3);
+    // level: stays at launch height; tilted up: climbs and keeps climbing
+    expect(Math.abs(level[level.length - 1]! - 1.4)).toBeLessThan(0.2);
+    expect(up[up.length - 1]!).toBeGreaterThan(up[0]!);
+    expect(up[up.length - 1]!).toBeGreaterThan(3);
+  });
+
+  it("never goes underground when aimed down", () => {
+    const { room, pa, advance, startPlaying } = setup();
+    startPlaying();
+    room.updatePosition(pa, origin.lat, origin.lon, 3, 0);
+    room.selectWeapon(pa, "rocket");
+    room.shoot(pa, 0, "rocket", { pitch: -30 });
+    for (let i = 0; i < 12 && room.projectiles.size; i++) {
+      advance(120);
+      room.tick();
+      for (const pr of room.projectiles.values()) expect(pr.y).toBeGreaterThanOrEqual(0.4);
+    }
+  });
+});

@@ -567,17 +567,22 @@ export class ArScene {
     onArrive?: () => void,
     speedMps?: number,
     ammo?: AmmoKind,
+    mine = false,
   ): void {
     const h = headingDeg * DEG;
     const p = pitchDeg * DEG;
     const start = from ?? new THREE.Vector3(x, 1.3, z);
-    // The bolt leaves the muzzle along the full 3D aim direction: yaw from the
-    // compass, elevation from the phone's tilt. Without the pitch term every
-    // tracer stayed in the crosshair plane no matter how the phone was held.
+    // Where the aim line actually points. For my own shot the line has to be
+    // measured from the eye, not from the muzzle: the barrel sits a couple of
+    // decimetres to the side of the camera and every weapon's muzzle sits in a
+    // different place, so a line drawn from the muzzle runs parallel to the aim
+    // and never crosses the crosshair — "снаряды летят мимо прицела", and
+    // differently for each weapon. Converging on the aim point fixes both.
+    const eye = mine ? this.world.worldToLocal(this.camera.getWorldPosition(new THREE.Vector3())) : start;
     const cp = Math.cos(p);
     const end = target
       ? new THREE.Vector3(target.x, 1.0, target.z)
-      : new THREE.Vector3(start.x + Math.sin(h) * cp * len, start.y + Math.sin(p) * len, start.z - Math.cos(h) * cp * len);
+      : new THREE.Vector3(eye.x + Math.sin(h) * cp * len, eye.y + Math.sin(p) * len, eye.z - Math.cos(h) * cp * len);
     // Each weapon's round flies at its own speed AND is drawn as its own kind of
     // object, so a plasma lob and a rail slug read completely differently along
     // the same line.

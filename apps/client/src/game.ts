@@ -31,6 +31,9 @@ type PlaceKind = Extract<ObjectKind, "turret" | "barrier" | "drone" | "medkit">;
  * Game session controller: joins the room, streams position, renders AR or the
  * screenless UI, handles fire/place, and turns server events into feedback.
  */
+/** How far off the aim line a target may be for the tracer to bend onto it. */
+const VISUAL_SNAP_DEG = 6;
+
 export class Game {
   private world = new WorldState();
   private hud: Hud | null = null;
@@ -333,6 +336,7 @@ export class Game {
             undefined,
             def?.speedMps,
             def?.ammo,
+            true, // my own shot: converge the line on the crosshair
           );
         }
       }
@@ -369,6 +373,12 @@ export class Game {
       (d) => weaponCone(w, d, me?.bloom ?? 0, this.zoomed),
     );
     if (!hot) return null;
+    // The hit cone is as wide as GPS forces it to be — up to 20° at close
+    // range. Bending the tracer onto anybody inside it makes the round visibly
+    // fly away from the crosshair. The visual snap keeps a tight cone; wider
+    // than that the round is drawn where it was aimed, and the hit still lands
+    // (the server's own shot event puts the spark on the victim).
+    if (hot.angErr > VISUAL_SNAP_DEG) return null;
     const p = this.world.players.get(hot.id);
     return p ? { id: p.id, x: p.rx, z: p.rz } : null;
   }
