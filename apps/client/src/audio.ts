@@ -35,9 +35,14 @@ export class GameAudio {
     comp.connect(ctx.destination);
     // reverb send
     this.reverb = ctx.createConvolver();
-    this.reverb.buffer = makeImpulse(ctx, 1.6, 2.2);
+    // Normalisation scales a noise impulse up hard, which is how a send of 0.02
+    // still came back as an audible tail.
+    this.reverb.normalize = false;
+    // A lawn has almost nothing to reflect off. The old 1.6 s hall was audible
+    // as a stray echo behind every shot; this is a short outdoor slap.
+    this.reverb.buffer = makeImpulse(ctx, 0.45, 4.5);
     this.reverbSend = ctx.createGain();
-    this.reverbSend.gain.value = 0.35;
+    this.reverbSend.gain.value = 0.18;
     this.reverbSend.connect(this.reverb);
     this.reverb.connect(this.master);
     const p = ctx.createPanner();
@@ -68,7 +73,7 @@ export class GameAudio {
   }
 
   /** Play a sample. rel = {x right, z forward(-)} in metres for spatial sources. */
-  play(id: SfxId, o: { gain?: number; rate?: number; rel?: { x: number; z: number }; dist?: number; reverb?: number; tilt?: number; body?: number } = {}): void {
+  play(id: SfxId, o: { gain?: number; rate?: number; rel?: { x: number; z: number }; dist?: number; reverb?: number; tilt?: number; body?: number; gateMs?: number } = {}): void {
     if (!this.ctx || !this.master || !this.enabled) return;
     const buf = this.buffers.get(id);
     if (!buf) return;
@@ -115,17 +120,43 @@ export class GameAudio {
       lp.connect(pan);
       out = pan;
     }
+    // The generated set is cinematic: a rifle clip runs a full second, a sniper
+    // two and a half. Played whole, every shot drags its own tail over the next
+    // one and the result reads as an echo. The gate keeps the crack and the
+    // body and cuts what comes after.
+    let stopAt = 0;
+    if (o.gateMs) {
+      const end = this.ctx.currentTime + o.gateMs / 1000;
+      g.gain.setValueAtTime(o.gain ?? 0.8, end);
+      g.gain.exponentialRampToValueAtTime(0.0008, end + 0.07);
+      stopAt = end + 0.09;
+    }
     out.connect(this.master);
     if (this.reverbSend) {
+      // A shot at your shoulder is dry; one across the field picks up a little
+      // air. A fixed send made near shots sound like a corridor.
+      const far = o.dist === undefined ? 1 : Math.max(0.25, Math.min(1, o.dist / 25));
       const rs = this.ctx.createGain();
-      rs.gain.value = o.reverb ?? 0.5;
+      rs.gain.value = (o.reverb ?? 0.25) * far;
       out.connect(rs);
       rs.connect(this.reverbSend);
     }
     src.start();
+    // stop() is only legal once the node has been started.
+    if (stopAt) src.stop(stopAt);
   }
 
-  /** Play the first available sample from a preference list (generated set first, Kenney fallback). */
+  /**
+   * The longest a shot may ring: never longer than the gap to the next one, so
+   * a fast weapon cannot stack tails on top of itself, and never so short that
+   * a heavy weapon loses its boom.
+   */
+  private static shotGate(weapon: "pistol" | "blaster" | "sniper" | "rocket", cooldownMs?: number): number {
+    const cap = weapon === "rocket" ? 800 : weapon === "sniper" ? 520 : 420;
+    const cd = cooldownMs && cooldownMs > 0 ? cooldownMs * 0.9 : cap;
+    return Math.round(Math.max(140, Math.min(cap, cd)));
+  }
+
   private playFirst(ids: SfxId[], o: Parameters<GameAudio["play"]>[1] = {}): boolean {
     for (const id of ids) {
       if (this.buffers.has(id)) {
@@ -158,7 +189,7 @@ export class GameAudio {
     o.stop(t + dur + 0.02);
   }
 
-  private noise(dur: number, gain: number, lpFrom: number, lpTo: number, dest?: AudioNode): void {
+  private noise(dur: number, gain: number, lpFrom: number, lpTo: number, dest?: AudioNode, reverb = 0): void {
     if (!this.ctx || !this.master || !this.enabled) return;
     const sr = this.ctx.sampleRate;
     const buf = this.ctx.createBuffer(1, Math.floor(sr * dur), sr);
@@ -176,7 +207,14 @@ export class GameAudio {
     s.connect(f);
     f.connect(g);
     g.connect(dest ?? this.master);
-    if (this.reverbSend) g.connect(this.reverbSend);
+    // Sending the whole noise layer into the convolver is what put a tail on
+    // every shot: it is opt-in now, and dry by default.
+    if (reverb > 0 && this.reverbSend) {
+      const rs = this.ctx.createGain();
+      rs.gain.value = reverb;
+      g.connect(rs);
+      rs.connect(this.reverbSend);
+    }
     s.start();
   }
 
@@ -207,7 +245,7 @@ export class GameAudio {
     this.osc(low * (0.9 + h * 0.25), weapon === "rocket" ? 0.2 : light ? 0.08 : 0.13, "sine", light ? 0.1 : 0.18, low * 0.55);
   }
 
-  shot(weapon: "pistol" | "blaster" | "sniper" | "rocket", pitch?: number, weaponId?: string): void {
+  shot(weapon: "pistol" | "blaster" | "sniper" | "rocket", pitch?: number, weaponId?: string, cooldownMs?: number): void {
     const r = (base: number) => (pitch ? base * (pitch / (weapon === "rocket" ? 0.55 : weapon === "pistol" ? 1.5 : weapon === "sniper" ? 0.6 : 1.15)) : base);
     // Generated cinematic set: pitch scales lightly around 1.0 so variants still differ.
     const h = GameAudio.idHash(weaponId);
@@ -246,9 +284,10 @@ export class GameAudio {
       this.playFirst(ids, {
         gain: heavy ? 0.95 : 0.8,
         rate: v,
+        gateMs: GameAudio.shotGate(weapon, cooldownMs),
         // A shot a metre from your face is not a cathedral: the long tail was
         // most of the "strange" in the old mix.
-        reverb: weapon === "sniper" ? 0.45 : 0.18,
+        reverb: weapon === "sniper" ? 0.25 : 0.1,
         tilt: (h - 0.5) * 0.7,
         body: (0.5 - h) * 0.6,
       })
@@ -259,8 +298,8 @@ export class GameAudio {
     }
     switch (weapon) {
       case "rocket":
-        this.play("blaster", { gain: 0.9, rate: r(0.55), reverb: 0.4 });
-        this.noise(0.45, 0.5, 3000, 300);
+        this.play("blaster", { gain: 0.9, rate: r(0.55), reverb: 0.3 });
+        this.noise(0.45, 0.5, 3000, 300, undefined, 0.3);
         this.punch(h, "rocket");
         this.vibrate(40);
         break;
@@ -309,24 +348,27 @@ export class GameAudio {
   remoteShot(weapon: string, rel: { x: number; z: number }, dist: number): void {
     const gain = Math.max(0.05, 1 - dist / 90);
     const gen: Record<string, SfxId[]> = { pistol: ["g_pistol_b", "g_pistol_a"], blaster: ["g_rifle_b", "g_rifle_a"], sniper: ["g_sniper"], rocket: ["g_rocket"], turret: ["g_turret"], drone: ["g_pistol_b"] };
-    if (gen[weapon] && this.playFirst(gen[weapon]!, { gain, rel, dist, reverb: 0.8 })) return;
-    if (weapon === "rocket") this.play("blaster", { gain, rate: 0.55, rel, dist, reverb: 0.8 });
-    else if (weapon === "pistol") this.play("laser1", { gain: gain * 0.8, rate: 1.5, rel, dist, reverb: 0.4 });
-    else if (weapon === "sniper") this.play("zap", { gain, rate: 0.6, rel, dist, reverb: 1 });
+    // Someone else's shot is gated too: a firefight of six players must not turn
+    // into a wall of overlapping one-second tails.
+    const gate = weapon === "rocket" ? 700 : weapon === "sniper" ? 600 : 360;
+    if (gen[weapon] && this.playFirst(gen[weapon]!, { gain, rel, dist, reverb: 0.35, gateMs: gate })) return;
+    if (weapon === "rocket") this.play("blaster", { gain, rate: 0.55, rel, dist, reverb: 0.4 });
+    else if (weapon === "pistol") this.play("laser1", { gain: gain * 0.8, rate: 1.5, rel, dist, reverb: 0.2 });
+    else if (weapon === "sniper") this.play("zap", { gain, rate: 0.6, rel, dist, reverb: 0.4 });
     else if (weapon === "turret") this.play("zap", { gain: gain * 0.8, rate: 0.9, rel, dist });
     else if (weapon === "drone") this.play("laser1", { gain: gain * 0.6, rate: 1.6, rel, dist });
-    else this.play("laser4", { gain, rate: 1.1, rel, dist, reverb: 0.6 });
+    else this.play("laser4", { gain, rate: 1.1, rel, dist, reverb: 0.3 });
   }
   explosion(dist: number, rel?: { x: number; z: number }): void {
     const g = Math.max(0.15, 1 - dist / 80);
-    if (this.playFirst(dist > 35 ? ["g_explosion_far", "g_explosion_big"] : dist > 12 ? ["g_explosion_mid", "g_explosion_big"] : ["g_explosion_big", "g_explosion_mid"], { gain: Math.min(1, g * 1.2), rel: dist > 6 ? rel : undefined, dist, reverb: 0.9 })) {
+    if (this.playFirst(dist > 35 ? ["g_explosion_far", "g_explosion_big"] : dist > 12 ? ["g_explosion_mid", "g_explosion_big"] : ["g_explosion_big", "g_explosion_mid"], { gain: Math.min(1, g * 1.2), rel: dist > 6 ? rel : undefined, dist, reverb: 0.55 })) {
       this.vibrate(dist < 12 ? [120, 40, 80] : 60);
       return;
     }
     this.noise(1.4, 1.2 * g, 6000, 120);
     this.osc(60, 1.1, "sine", 0.9 * g, 28);
     this.osc(220, 0.25, "sawtooth", 0.3 * g, 50);
-    this.play("destroy", { gain: 0.6 * g, rate: 0.7, rel, dist, reverb: 0.9 });
+    this.play("destroy", { gain: 0.6 * g, rate: 0.7, rel, dist, reverb: 0.55 });
     this.vibrate(dist < 12 ? [120, 40, 80] : 60);
   }
   hitConfirm(kill = false): void {

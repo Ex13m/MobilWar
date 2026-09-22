@@ -83,7 +83,7 @@ export class Game {
         const rel = this.relTo(x, z) * (Math.PI / 180);
         this.o.audio.grenadeBounce({ x: Math.sin(rel) * Math.min(d, 30), z: -Math.cos(rel) * Math.min(d, 30) }, d);
       };
-      (window as unknown as { __mw?: unknown }).__mw = { scene: this.scene, world: this.world, hud: () => this.hud, event: (k: string, d?: Record<string, unknown>) => this.onEvent(k, d) };
+      (window as unknown as { __mw?: unknown }).__mw = { scene: this.scene, world: this.world, audio: this.o.audio, hud: () => this.hud, event: (k: string, d?: Record<string, unknown>) => this.onEvent(k, d) };
       this.hud = new Hud(root, {
         onFire: () => this.trigger(),
         onFireEnd: () => this.triggerEnd(),
@@ -305,7 +305,8 @@ export class Game {
     this.lastShotAt[w] = now;
     const heading = this.o.sensors.orient.heading;
     const pitch = this.o.sensors.orient.pitch;
-    this.o.audio.shot(w, weaponById(this.o.profile.loadout[w])?.pitch, this.o.profile.loadout[w]);
+    const sdef = weaponById(this.o.profile.loadout[w]);
+    this.o.audio.shot(w, sdef?.pitch, this.o.profile.loadout[w], sdef?.cooldownMs);
     this.net.send({ type: "shoot", weapon: w, heading, pitch: this.o.sensors.orient.pitch, ct: now, chargeMs: Math.round(chargeMs), zoomed: this.zoomed });
     if (this.scene) {
       if (w !== this.scene.viewmodel.current) void this.scene.viewmodel.setWeapon(w, this.o.profile.loadout[w]);
