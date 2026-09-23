@@ -60,12 +60,16 @@ export const GAME = {
    * which is what stops "I died behind cover".
    */
   MAX_REWIND_MS: 400,
-  /** Minimum time dead before respawn is possible, ms. */
-  RESPAWN_MS: 8000,
+  /**
+   * Minimum time dead before respawn is possible, ms. Kept short on purpose:
+   * at a 1.4 s time-to-kill, thirty seconds of walking back was most of what a
+   * player actually did in a round (см. docs/HEURISTICS.md §2).
+   */
+  RESPAWN_MS: 5000,
   /** After this extra time a dead player respawns even without reaching the base, ms. */
-  RESPAWN_AUTO_MS: 22000,
-  /** Distance to own base that triggers respawn (m). */
-  BASE_RADIUS_M: 8,
+  RESPAWN_AUTO_MS: 10000,
+  /** Distance to own base that triggers respawn (m). Wider than GPS noise, so "reach the base" is not a search. */
+  BASE_RADIUS_M: 12,
   /** Invulnerability right after respawn, ms. */
   SPAWN_PROTECT_MS: 3000,
   /** Overcharge buff: blaster damage multiplier and duration. */
@@ -200,8 +204,11 @@ export const GAME = {
   },
   SUPPLY_PER_PLAYER: 6,
   MAX_PLAYERS_PER_ROOM: 16,
-  /** Default room geofence radius (m). */
-  DEFAULT_ZONE_RADIUS_M: 150,
+  /**
+   * Default room geofence radius (m). A lawn, not a park: at 150 m the walk
+   * from a base to the middle was a minute.
+   */
+  DEFAULT_ZONE_RADIUS_M: 60,
   /**
    * The round starts by itself once this many players are in the room, after a
    * short countdown. A referee is optional: a pick-up game on a lawn has nobody

@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { SLOTS, WEAPON_CATALOG, catalogCone, defaultLoadout, sanitizeLoadout, ttk, weaponById } from "../src/weapons.js";
+import { GAME } from "../src/constants.js";
 
 describe("weapon catalog", () => {
   it("has 30 weapons per slot, 120 total, unique ids and names", () => {
@@ -45,5 +46,28 @@ describe("weapon catalog", () => {
     const p = WEAPON_CATALOG.pistol[0]!;
     expect(catalogCone(p, 5, 0, false)).toBe(5);
     expect(catalogCone(p, 20, 0, false)).toBeCloseTo(14);
+  });
+});
+
+describe("выбор оружия безопасен для ребёнка", () => {
+  it("тренировочные стволы помечены и не стоят по умолчанию", () => {
+    const training = SLOTS.flatMap((s) => WEAPON_CATALOG[s].filter((w) => w.training));
+    expect(training.length).toBe(4);
+    for (const w of training) expect(w.name.startsWith("Ноль")).toBe(true);
+    const def = defaultLoadout();
+    for (const s of SLOTS) expect(weaponById(def[s])?.training).toBeFalsy();
+  });
+
+  it("у тяжёлого слота есть запасной магазин на жизнь", () => {
+    for (const w of WEAPON_CATALOG.rocket) expect(w.reserve).toBeGreaterThanOrEqual(w.mag);
+  });
+
+  it("темп возврата в бой не растягивает раунд", () => {
+    // смерть → снова в строю: не дольше 15 с даже без похода на базу
+    expect(GAME.RESPAWN_MS + GAME.RESPAWN_AUTO_MS).toBeLessThanOrEqual(15000);
+    // радиус базы шире шума GPS, иначе «дойти до базы» превращается в поиск
+    expect(GAME.BASE_RADIUS_M).toBeGreaterThan(GAME.HIT_RADIUS_BASE_M * 2);
+    // зона по умолчанию — лужайка, а не парк
+    expect(GAME.DEFAULT_ZONE_RADIUS_M).toBeLessThanOrEqual(80);
   });
 });

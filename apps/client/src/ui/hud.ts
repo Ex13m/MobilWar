@@ -1,4 +1,4 @@
-import { GAME, weaponById, type Loadout, type ObjectKind, type WeaponId } from "@mobilwar/shared";
+import { GAME, WEAPON_CATALOG, weaponById, type Loadout, type ObjectKind, type WeaponId } from "@mobilwar/shared";
 import { renderLoadout } from "./loadout.js";
 import type { WorldState } from "../state.js";
 
@@ -257,7 +257,7 @@ export class Hud {
     p.hidden = false;
     p.dataset.slot = slot;
     const names: Record<WeaponId, string> = { pistol: "Пистолет", blaster: "Винтовка", sniper: "Снайперка", rocket: "Тяжёлое" };
-    this.q(".picker-title").textContent = `${names[slot]} · 30 вариантов`;
+    this.q(".picker-title").textContent = `${names[slot]} · ${WEAPON_CATALOG[slot].filter((w) => !w.training).length} вариантов`;
     this.pickerOff = renderLoadout(body, this.loadout, (s, id) => {
       this.setLoadout(this.loadout!);
       this.cb.onPick(s, id);

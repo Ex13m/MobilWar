@@ -67,6 +67,12 @@ export interface WeaponDef {
   id: string;
   slot: Slot;
   name: string;
+  /**
+   * A dummy round for teaching the controls: one damage, never a real choice.
+   * The picker keeps these out of the ordinary list so nobody walks into a
+   * match with a weapon that cannot kill.
+   */
+  training?: boolean;
   /** Short flavour line for the picker. */
   blurb: string;
   damage: number;
@@ -143,7 +149,7 @@ const PISTOLS: Row[] = [
   ["Ёж", "3 дробины + поджиг", "pellets", 4, 550, 12, 12, 6, 1400, "pistol3", 0xf87171, 0.95, { pellets: 3, burnS: 2 }],
   ["Эхо", "цепь + лечение стрелка", "chain", 8, 270, 30, 5, 12, 1000, "pistol", 0x5eead4, 1.9, { lifestealNote: 1 } as Partial<WeaponDef>],
   ["Лазурь", "сбалансированный, красивый", "none", 11, 210, 34, 5, 12, 950, "pistol2", 0x38bdf8, 1.55],
-  ["Ноль", "тренировочный: 1 урон, ∞ темп", "none", 1, 60, 30, 8, 60, 500, "pistol", 0xffffff, 2.3],
+  ["Ноль", "тренировочный: 1 урон, ∞ темп", "none", 1, 60, 30, 8, 60, 500, "pistol", 0xffffff, 2.3, { training: true }],
 ];
 
 const RIFLES: Row[] = [
@@ -176,7 +182,7 @@ const RIFLES: Row[] = [
   ["Стрекоза", "самая быстрая", "none", 5, 55, 50, 9, 50, 2000, "minigun", 0xfef3c7, 1.5],
   ["Салют", "разрывные: задевают соседей, сплэш 3.5 м", "flak", 7, 240, 55, 8, 24, 2100, "rifle2", 0xfda4af, 1.05, { splashM: 3.5, damageEdge: 2 }],
   ["Вьюн", "6 дробин + цепь", "pellets", 3, 420, 20, 12, 8, 2200, "rifle3", 0x22d3ee, 0.9, { pellets: 6 }],
-  ["Ноль-В", "тренировочная: 1 урон", "none", 1, 60, 60, 8, 100, 500, "rifle", 0xffffff, 1.6],
+  ["Ноль-В", "тренировочная: 1 урон", "none", 1, 60, 60, 8, 100, 500, "rifle", 0xffffff, 1.6, { training: true }],
 ];
 
 const SNIPERS: Row[] = [
@@ -209,7 +215,7 @@ const SNIPERS: Row[] = [
   ["Молчун", "тихий, 50, далеко", "none", 50, 1300, 130, 3, 5, 2800, "sniper", 0x64748b, 0.4],
   ["Ярость", "пробитие 60, 3 патрона", "pierce", 60, 1600, 110, 3, 3, 3200, "sniper2", 0xef4444, 0.5],
   ["Роса-С", "медик-снайперка 30/30", "heal", 30, 1000, 100, 4, 6, 2600, "sniper", 0x4ade80, 0.75],
-  ["Ноль-С", "тренировочная: 1 урон", "none", 1, 300, 120, 4, 30, 500, "sniper2", 0xffffff, 1.0],
+  ["Ноль-С", "тренировочная: 1 урон", "none", 1, 300, 120, 4, 30, 500, "sniper2", 0xffffff, 1.0, { training: true }],
 ];
 
 const HEAVIES: Row[] = [
@@ -242,7 +248,7 @@ const HEAVIES: Row[] = [
   ["Гром", "60 урона, сплэш 5, дальний", "none", 60, 3200, 55, 10, 1, 3500, "rocket", 0xfacc15, 0.45, { splashM: 5, damageEdge: 20, fuseM: 3, speedMps: 24 }],
   ["Пыль", "10 дробин, 15 м, 3 патрона", "pellets", 6, 800, 15, 16, 3, 2600, "rocket2", 0xfdba74, 0.85, { pellets: 10, splashM: 0 }],
   ["Санитар", "лечит 60 в 5 м", "heal", 60, 3000, 35, 12, 1, 3000, "rocket", 0x4ade80, 0.75, { splashM: 5, damageEdge: 60, fuseM: 3, speedMps: 20 }],
-  ["Ноль-Т", "тренировочная: 1 урон", "none", 1, 1000, 40, 12, 5, 500, "rocket2", 0xffffff, 1.0, { splashM: 6, damageEdge: 1, fuseM: 3, speedMps: 22 }],
+  ["Ноль-Т", "тренировочная: 1 урон", "none", 1, 1000, 40, 12, 5, 500, "rocket2", 0xffffff, 1.0, { splashM: 6, damageEdge: 1, fuseM: 3, speedMps: 22, training: true }],
 ];
 
 /**
@@ -252,6 +258,8 @@ const HEAVIES: Row[] = [
  * many pistol rounds, and the ammo economy says so.
  */
 const AMMO_BUDGET: Record<Slot, number> = { pistol: 600, blaster: 1400, sniper: 900, rocket: 0 };
+/** The heavy slot gets one spare magazine per life; everything beyond that is a pickup. */
+const ROCKET_SPARE_MAGS = 1;
 
 /**
  * Pick the ammunition class for a catalog entry.
@@ -289,7 +297,10 @@ function idHash(id: string): number {
  */
 function spareRounds(slot: Slot, damage: number, mag: number, pellets: number): number {
   const budget = AMMO_BUDGET[slot];
-  if (budget <= 0) return 0; // the heavy slot is fed by pickups, not by spares
+  // The heavy slot used to live on pickups alone, which came to a median of 0.3
+  // kills per life — a button that was almost always empty. One spare magazine
+  // makes it a weapon again without making it the main one.
+  if (budget <= 0) return mag * ROCKET_SPARE_MAGS;
   const perRound = Math.max(1, damage * Math.max(1, pellets));
   const rounds = Math.ceil(budget / perRound) - mag;
   return Math.max(mag, Math.min(mag * 6, Math.round(rounds / mag) * mag || mag));

@@ -12,11 +12,21 @@ const TRAIT_RU: Record<string, string> = {
  */
 export function renderLoadout(root: HTMLElement, loadout: Loadout, onChange: (slot: Slot, id: string) => void, only?: Slot[]): () => void {
   const slots = only ?? [...SLOTS];
-  root.innerHTML = slots.map((slot) => `
+  root.innerHTML = slots.map((slot) => {
+    // Training dummies live at the end behind their own label: they do 1 damage
+    // and picking one by accident means walking into a match unarmed.
+    const list = WEAPON_CATALOG[slot].filter((w) => !w.training);
+    const dummies = WEAPON_CATALOG[slot].filter((w) => w.training);
+    const cards = list.map((w, i) => card(w, i + 1, loadout[slot] === w.id)).join("");
+    const training = dummies.length
+      ? `<div class="lo-train"><span>тренировка</span>${dummies.map((w) => card(w, 0, loadout[slot] === w.id)).join("")}</div>`
+      : "";
+    return `
     <div class="lo-slot" data-slot="${slot}">
       <div class="lo-head"><b>${SLOT_NAMES[slot]}</b><span class="lo-cur">${esc(nameOf(loadout[slot]))}</span></div>
-      <div class="lo-row">${WEAPON_CATALOG[slot].map((w, i) => card(w, i + 1, loadout[slot] === w.id)).join("")}</div>
-    </div>`).join("");
+      <div class="lo-row">${cards}${training}</div>
+    </div>`;
+  }).join("");
   const handler = (e: Event) => {
     const el = (e.target as HTMLElement).closest<HTMLElement>(".lo-card");
     if (!el) return;
@@ -35,7 +45,8 @@ export function renderLoadout(root: HTMLElement, loadout: Loadout, onChange: (sl
 }
 
 export function cycleWeapon(loadout: Loadout, slot: Slot, dir: 1 | -1): string {
-  const list = WEAPON_CATALOG[slot];
+  // Cycling in the HUD never lands on a training dummy.
+  const list = WEAPON_CATALOG[slot].filter((w) => !w.training);
   const i = list.findIndex((w) => w.id === loadout[slot]);
   const n = (i + dir + list.length) % list.length;
   loadout[slot] = list[n]!.id;
