@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { resolveShot, effectiveHalfAngle, damageAtDistance, grenadeHop } from "../src/combat.js";
+import { resolveShot, effectiveHalfAngle, damageAtDistance, grenadeHop, precisionMult } from "../src/combat.js";
+import { GAME } from "../src/constants.js";
 
 describe("combat", () => {
   const shooter = { x: 0, z: 0, acc: 5 };
@@ -51,5 +52,32 @@ describe("grenadeHop", () => {
     // it is on the ground when it leaves the hand and when it stops
     expect(grenadeHop(0).y).toBeCloseTo(0, 5);
     expect(grenadeHop(1).y).toBeCloseTo(0, 5);
+  });
+});
+
+describe("precisionMult", () => {
+  it("full damage dead centre, a graze at the edge, monotone in between", () => {
+    expect(precisionMult(0, 10)).toBeCloseTo(1, 5);
+    expect(precisionMult(10, 10)).toBeCloseTo(GAME.AIM.PRECISION_MIN, 5);
+    expect(precisionMult(5, 10)).toBeGreaterThan(GAME.AIM.PRECISION_MIN);
+    expect(precisionMult(5, 10)).toBeLessThan(1);
+    let prev = 2;
+    for (let e = 0; e <= 10; e += 0.5) {
+      const m = precisionMult(e, 10);
+      expect(m).toBeLessThanOrEqual(prev);
+      prev = m;
+    }
+    // a shot outside the cone never gets here, but the function must not go negative
+    expect(precisionMult(50, 10)).toBeCloseTo(GAME.AIM.PRECISION_MIN, 5);
+    expect(precisionMult(1, 0)).toBe(1);
+  });
+
+  it("point blank is covered: the hit radius holds down to five metres", () => {
+    // the 45° cap used to shrink the radius below the GPS floor inside ~7 m
+    const R = GAME.HIT_RADIUS_BASE_M + 0.5 * (5 + 5);
+    for (const d of [5, 8, 12, 20]) {
+      const ang = effectiveHalfAngle(d, 5, 5, 7);
+      expect(Math.tan((ang * Math.PI) / 180) * d).toBeGreaterThanOrEqual(R - 0.01);
+    }
   });
 });

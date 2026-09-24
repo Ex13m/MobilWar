@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { GAME, destination, weaponById, WEAPON_CATALOG, SLOTS, type ServerMsg } from "@mobilwar/shared";
-import { Room, type Client } from "../src/room.js";
+import { Room, type Client, type Player } from "../src/room.js";
 
 const origin = { lat: 55.75, lon: 37.61 };
 
@@ -28,6 +28,21 @@ function setup(mode: "tdm" | "ctf" | "koth" | "infection" | "turret_defense" = "
   return { room, a, b, pa, pb, advance, startPlaying, clock };
 }
 
+/**
+ * Fire until the target drops. Hit counts are no longer fixed numbers: damage
+ * scales with how centred the shot was (GAME.AIM) and the health bar is 150, so
+ * a test that hardcodes "twelve hits" is testing yesterday's constants.
+ */
+function killWith(room: Room, shooter: Player, victim: Player, advance: (ms: number) => void, max = 60): number {
+  for (let i = 1; i <= max; i++) {
+    room.shoot(shooter, 0);
+    advance(GAME.RIFLE_COOLDOWN_MS + 1);
+    room.tick();
+    if (!victim.alive) return i;
+  }
+  throw new Error(`target still alive after ${max} triggers, hp ${victim.hp}`);
+}
+
 describe("Room", () => {
   it("balances teams", () => {
     const { room } = setup();
@@ -37,19 +52,21 @@ describe("Room", () => {
     expect(d.team).toBe("blue");
   });
 
-  it("blaster hits enemy straight ahead (9 dmg) and kills after 12 hits", () => {
+  it("a centred blaster round does full damage and kills the bar in ~17 hits", () => {
     const { room, pa, pb, b, advance, startPlaying } = setup();
     startPlaying();
     expect(room.phase).toBe("playing");
     room.updatePosition(pa, origin.lat, origin.lon, 5, 0);
     const north = destination(origin, 0, 20);
     room.updatePosition(pb, north.lat, north.lon, 5, 180);
-    for (let i = 0; i < 12; i++) {
-      room.shoot(pa, 0);
-      // Rounds have a flight time now, so the tick is what lands them.
-      advance(GAME.RIFLE_COOLDOWN_MS + 1);
-      room.tick();
-    }
+    // dead ahead → precision 1 → the weapon's own damage, nothing shaved off
+    room.shoot(pa, 0);
+    advance(GAME.RIFLE_COOLDOWN_MS + 1);
+    room.tick();
+    const perHit = GAME.MAX_HP - pb.hp;
+    expect(perHit).toBe(weaponById(pa.loadout.blaster)!.damage);
+    const shots = 1 + killWith(room, pa, pb, advance);
+    expect(shots).toBe(Math.ceil(GAME.MAX_HP / perHit));
     expect(pb.alive).toBe(false);
     expect(pa.kills).toBe(1);
     expect(room.score.red).toBe(1);
@@ -364,10 +381,7 @@ describe("Room", () => {
     room.updatePosition(pa, origin.lat, origin.lon, 5, 0);
     const north = destination(origin, 0, 10);
     room.updatePosition(pb, north.lat, north.lon, 5, 180);
-    for (let i = 0; i < 12; i++) {
-      room.shoot(pa, 0);
-      advance(GAME.RIFLE_COOLDOWN_MS + 1);
-    }
+    killWith(room, pa, pb, advance);
     expect(pb.alive).toBe(false);
     advance(GAME.RESPAWN_MS + 1);
     room.tick();
@@ -394,10 +408,7 @@ describe("Room", () => {
     room.updatePosition(pa, origin.lat, origin.lon, 5, 0);
     const north = destination(origin, 0, 10);
     room.updatePosition(pb, north.lat, north.lon, 5, 180);
-    for (let i = 0; i < 12; i++) {
-      room.shoot(pa, 0);
-      advance(GAME.RIFLE_COOLDOWN_MS + 1);
-    }
+    killWith(room, pa, pb, advance);
     expect(pb.alive).toBe(false);
     advance(GAME.RESPAWN_MS + GAME.RESPAWN_AUTO_MS + 1);
     room.tick();
@@ -679,10 +690,7 @@ describe("Room", () => {
     room.updatePosition(zombie, origin.lat, origin.lon, 3, 0);
     const n = destination(origin, 0, 10);
     room.updatePosition(human, n.lat, n.lon, 3, 180);
-    for (let i = 0; i < 12; i++) {
-      room.shoot(zombie, 0);
-      advance(GAME.RIFLE_COOLDOWN_MS + 1);
-    }
+    killWith(room, zombie, human, advance);
     expect(human.team).toBe("red");
     room.tick();
     expect(room.phase).toBe("ended");
@@ -738,7 +746,7 @@ describe("Room", () => {
     expect(pa.bloom).toBeLessThanOrEqual(GAME.WEAPONS.blaster.BLOOM + 0.01);
   });
 
-  it("pistol is precise to 10 m then widens; sniper charged shot one-shots", () => {
+  it("pistol is precise to 10 m then widens; a charged sniper shot takes most of the bar", () => {
     const { room, pa, pb, advance, startPlaying } = setup();
     startPlaying();
     room.updatePosition(pa, origin.lat, origin.lon, 1, 0);
@@ -763,6 +771,14 @@ describe("Room", () => {
     const straight = destination(origin, 0, 30);
     advance(1000);
     room.updatePosition(pb, straight.lat, straight.lon, 1, 180);
+    advance(GAME.WEAPONS.sniper.COOLDOWN_MS + 1);
+    room.shoot(pa, 0, "sniper", { zoomed: true, chargeMs: 1000 });
+    advance(400);
+    room.tick();
+    // 150 HP means the charge no longer deletes a player outright — it takes
+    // most of the bar and the follow-up finishes the job.
+    expect(pb.hp).toBeLessThanOrEqual(GAME.MAX_HP / 2);
+    expect(pb.alive).toBe(true);
     advance(GAME.WEAPONS.sniper.COOLDOWN_MS + 1);
     room.shoot(pa, 0, "sniper", { zoomed: true, chargeMs: 1000 });
     advance(400);

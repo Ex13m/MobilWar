@@ -24,12 +24,15 @@ export interface HitCandidate {
  * Effective half-angle of the hit cone for a target at distance `dist`.
  * We treat the combined GPS uncertainty as a disc of radius R around the target;
  * the disc subtends atan(R/dist) — so close targets are "bigger".
- * R = base + 0.5*(shooterAcc + targetAcc), clamped so the cone never exceeds 45°.
+ * R = base + 0.5*(shooterAcc + targetAcc), clamped so the cone never exceeds
+ * GAME.MAX_HALF_ANGLE_DEG. The cap used to be 45°, which quietly shrank the hit
+ * radius below R inside about seven metres — point blank was the least reliable
+ * range in the game (docs/HEURISTICS.md §1).
  */
 export function effectiveHalfAngle(dist: number, shooterAcc: number, targetAcc: number, weaponCone: number = GAME.CONE_HALF_ANGLE_DEG): number {
   const R = GAME.HIT_RADIUS_BASE_M + 0.5 * (clampAcc(shooterAcc) + clampAcc(targetAcc));
   const fromRadius = (Math.atan2(R, Math.max(dist, 0.5)) * 180) / Math.PI;
-  return Math.min(45, Math.max(weaponCone, fromRadius));
+  return Math.min(GAME.MAX_HALF_ANGLE_DEG, Math.max(weaponCone, fromRadius));
 }
 
 export type ConeFn = number | ((dist: number) => number);
@@ -132,6 +135,23 @@ export function grenadeHop(k: number): { d: number; y: number } {
     dist += span;
   }
   return { d: 1, y: 0 };
+}
+
+/**
+ * How much of a weapon's damage a shot keeps, given how far off the centre of
+ * its cone it landed. 1 dead centre, GAME.AIM.PRECISION_MIN at the edge.
+ *
+ * This is the whole answer to "GPS makes the cone so wide that aiming does not
+ * matter": the cone stays wide, so a rough shot still connects and the game
+ * stays playable with a sloppy compass, but a well-aimed one does more than
+ * twice the damage of a grazing one.
+ */
+export function precisionMult(angErr: number, allowed: number): number {
+  if (!(allowed > 0)) return 1;
+  const off = Math.max(0, Math.min(1, Math.abs(angErr) / allowed));
+  const k = GAME.AIM.PRECISION_K;
+  const m = GAME.AIM.PRECISION_MIN;
+  return m + (1 - m) * Math.pow(1 - off, k);
 }
 
 /** Splash damage: `center` at 0 m falling linearly to `edge` at `radius`; 0 beyond. */

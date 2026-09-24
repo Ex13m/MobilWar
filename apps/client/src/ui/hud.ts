@@ -358,9 +358,15 @@ export class Hud {
   setCrosshairHot(hot: boolean): void {
     this.q(".crosshair").classList.toggle("hot", hot);
   }
-  hitMarker(kill = false): void {
+  /**
+   * `quality`: how centred the round was (GAME.AIM). A centred hit gets a loud
+   * marker, a graze a faint one — that is how the player learns that the
+   * crosshair is worth something even though the cone is wide.
+   */
+  hitMarker(kill = false, quality = 1): void {
     const hm = this.q<HTMLElement>(".hm");
-    hm.className = "hm " + (kill ? "kill" : "hit");
+    const grade = kill ? "kill" : quality >= 0.85 ? "precise" : quality <= 0.55 ? "graze" : "hit";
+    hm.className = "hm " + grade;
     void hm.offsetWidth;
     hm.classList.add("show");
     setTimeout(() => hm.classList.remove("show"), 180);

@@ -4,7 +4,12 @@ export const GAME = {
   /** Position upload rate from client (Hz). */
   POS_HZ: 4,
   /** Max HP per player. */
-  MAX_HP: 100,
+  /**
+   * 150, not 100. At the old value the median rifle killed in 1.38 s, and
+   * leaving the 8 m hit radius in that time needs 5.7 m/s — there was no way to
+   * break contact (docs/HEURISTICS.md §1).
+   */
+  MAX_HP: 150,
   /** Shield capacity granted by a shield pickup (absorbs damage before HP). */
   SHIELD_MAX: 50,
   /**
@@ -217,6 +222,23 @@ export const GAME = {
   AUTOSTART_PLAYERS: 2,
   /** Grace period before the automatic countdown begins, ms. */
   AUTOSTART_DELAY_MS: 5000,
+  /**
+   * Aim quality. GPS forces the hit cone open — up to 20° at close range — so a
+   * shot "in the general direction" always landed and aiming bought nothing.
+   * Damage now falls off across that cone: dead centre is full, the very edge
+   * keeps PRECISION_MIN. The hit still registers, it just grazes.
+   */
+  /**
+   * Hard cap on the hit half-angle. Point blank needs it wide: at 45° the
+   * effective radius at 5 m was 5 m, under the 8 m the GPS floor asks for, so
+   * the closest range was the one that missed most.
+   */
+  MAX_HALF_ANGLE_DEG: 60,
+  AIM: {
+    PRECISION_MIN: 0.4,
+    /** 1 = linear falloff; higher punishes sloppy aim harder. */
+    PRECISION_K: 1,
+  },
   /** Client interpolation buffer (ms). */
   INTERP_DELAY_MS: 250,
 } as const;

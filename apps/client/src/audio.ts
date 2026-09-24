@@ -371,8 +371,11 @@ export class GameAudio {
     this.play("destroy", { gain: 0.6 * g, rate: 0.7, rel, dist, reverb: 0.55 });
     this.vibrate(dist < 12 ? [120, 40, 80] : 60);
   }
-  hitConfirm(kill = false): void {
-    if (!this.playFirst(["g_hit_confirm"], { gain: kill ? 0.9 : 0.6, rate: kill ? 0.9 : 1.15 })) this.play("confirm", { gain: kill ? 0.9 : 0.55, rate: kill ? 1.0 : 1.4 });
+  /** `quality` is how centred the round was: a graze reads quieter and duller. */
+  hitConfirm(kill = false, quality = 1): void {
+    const g = kill ? 0.9 : 0.35 + 0.3 * quality;
+    const r = kill ? 0.9 : 1.0 + 0.25 * quality;
+    if (!this.playFirst(["g_hit_confirm"], { gain: g, rate: r })) this.play("confirm", { gain: g, rate: kill ? 1.0 : 1.4 });
     this.vibrate(15);
   }
   gotHit(dmg: number): void {

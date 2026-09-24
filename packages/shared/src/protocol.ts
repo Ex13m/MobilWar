@@ -287,6 +287,8 @@ export interface ShotEventMsg {
   targetId?: string;
   targetKind?: "player" | "object";
   damage?: number;
+  /** How centred the shot was inside its cone, 0..1 (see GAME.AIM). */
+  precision?: number;
   /** Shot was stopped by a barrier at this point. */
   blockedBy?: string;
 }

@@ -474,12 +474,15 @@ export class Game {
     const mine = m.shooterId === this.world.myId;
     if (mine) {
       if (m.targetId && m.damage) {
-        this.o.audio.hitConfirm();
-        this.hud?.hitMarker(false);
+        const q = m.precision ?? 1;
+        this.o.audio.hitConfirm(false, q);
+        this.hud?.hitMarker(false, q);
         const pos = this.scene?.playerPos(m.targetId) ?? (this.world.objects.get(m.targetId) ? new THREE.Vector3(this.world.objects.get(m.targetId)!.x, 1, this.world.objects.get(m.targetId)!.z) : null);
         if (pos && this.scene) {
           const shielded = (this.world.players.get(m.targetId)?.shield ?? 0) > 0;
-          this.scene.fx.damageNumber(pos.clone().add(new THREE.Vector3((Math.random() - 0.5) * 0.6, 0.4, 0)), `-${m.damage}`, shielded ? "#38bdf8" : "#fff");
+          // gold for a centred round, grey for a graze: the number itself teaches aim
+          const col = shielded ? "#38bdf8" : q >= 0.85 ? "#fbbf24" : q <= 0.55 ? "#9ca3af" : "#fff";
+          this.scene.fx.damageNumber(pos.clone().add(new THREE.Vector3((Math.random() - 0.5) * 0.6, 0.4, 0)), `-${m.damage}`, col);
           this.scene.fx.hitSpark(pos, shielded ? FX.shield : FX.hit);
         }
       } else if (m.blockedBy) {

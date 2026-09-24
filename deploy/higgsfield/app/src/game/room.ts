@@ -4,6 +4,7 @@ import {
   checkPlausible,
   damageAtDistance,
   grenadeHop,
+  precisionMult,
   destination,
   fromLocal,
   haversine,
@@ -522,6 +523,10 @@ export class Room {
         this.damageObject(barrier, Math.round(W.damage / 2));
         continue;
       }
+      // Aim quality scales the round: dead centre is full damage, the edge of
+      // what GPS allows is a graze (GAME.AIM). Healing is not scaled — a medic
+      // should not be punished for the same noise.
+      const prec = precisionMult(hit.angErr, hit.allowed);
       let dmg = charged ? W.chargedDamage : weapon === "sniper" ? W.damage : damageAtDistance(W.damage, hit.dist, W.rangeM);
       if (p.overchargeUntil > t && weapon !== "sniper") dmg *= GAME.OVERCHARGE_MULT;
       const victim = this.players.get(hit.id);
@@ -537,10 +542,12 @@ export class Room {
         firstDone = true;
         continue;
       }
+      dmg = Math.max(1, Math.round(dmg * prec));
       if (!firstDone) {
         evt.targetId = hit.id;
         evt.targetKind = victim ? "player" : "object";
         evt.damage = dmg;
+        evt.precision = +prec.toFixed(2);
         firstDone = true;
       } else extra.push({ targetId: hit.id, damage: dmg });
       // Flight time. Anything slower than a rail slug arrives late.

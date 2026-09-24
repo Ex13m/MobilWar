@@ -78,9 +78,12 @@ describe("e2e over WebSocket", () => {
     b.send({ type: "pos", lat: north.lat, lon: north.lon, acc: 5, heading: 180, ct: 0 });
     await new Promise((r) => setTimeout(r, 100));
 
-    for (let i = 0; i < 12; i++) {
+    // The bar is 150 and damage scales with aim quality, so fire until it drops
+    // rather than counting on a fixed number of hits.
+    for (let i = 0; i < 40; i++) {
       a.send({ type: "shoot", heading: 0, pitch: 0, ct: 0 });
       await new Promise((r) => setTimeout(r, GAME.WEAPONS.blaster.COOLDOWN_MS + 40));
+      if ([...room.players.values()].some((p) => p.nick === "B" && !p.alive)) break;
     }
     const kill = await b.wait("kill");
     expect(kill.victimId).toBe(room.players.get([...room.players.keys()].find((k) => room.players.get(k)!.nick === "B")!)!.id);
