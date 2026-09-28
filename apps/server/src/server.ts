@@ -225,7 +225,7 @@ export function createApp(opts: { dbPath?: string } = {}) {
         if (!conn.shootBucket.take()) return;
         const p = room.players.get(conn.id);
         if (!p) return;
-        room.shoot(p, Number(msg.heading), msg.weapon, { chargeMs: Number(msg.chargeMs) || 0, zoomed: !!msg.zoomed, pitch: Number(msg.pitch) });
+        room.shoot(p, Number(msg.heading), msg.weapon, { chargeMs: Number(msg.chargeMs) || 0, zoomed: !!msg.zoomed, pitch: Number(msg.pitch), aimId: typeof msg.aimId === "string" ? msg.aimId : undefined, aimErrDeg: Number(msg.aimErrDeg) });
         break;
       }
       case "grenade": {

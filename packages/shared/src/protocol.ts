@@ -192,6 +192,15 @@ export interface ShootMsg {
    * target's elevation, so aiming up or down actually misses.
    */
   pitch: number;
+  /**
+   * Who was under the crosshair on the shooter's screen, and how far off centre
+   * they were (degrees). GPS puts a player several metres from where the camera
+   * shows them, so a shot aimed at what you see would miss what the server
+   * knows. The server treats this as a claim: it checks the target is a live
+   * enemy in range and roughly in front of the shooter, then honours it.
+   */
+  aimId?: string;
+  aimErrDeg?: number;
   ct: number;
 }
 

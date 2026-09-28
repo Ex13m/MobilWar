@@ -293,7 +293,7 @@ export class GameAudio {
       })
     ) {
       this.punch(h, weapon);
-      this.vibrate(weapon === "rocket" ? 40 : weapon === "sniper" ? 35 : 12);
+      this.kickback(weapon === "rocket" ? 45 : weapon === "sniper" ? 38 : weapon === "pistol" ? 12 : 16);
       return;
     }
     switch (weapon) {
@@ -376,7 +376,9 @@ export class GameAudio {
     const g = kill ? 0.9 : 0.35 + 0.3 * quality;
     const r = kill ? 0.9 : 1.0 + 0.25 * quality;
     if (!this.playFirst(["g_hit_confirm"], { gain: g, rate: r })) this.play("confirm", { gain: g, rate: kill ? 1.0 : 1.4 });
-    this.vibrate(15);
+    // a hit is a short tap, a centred one is two, a kill is a roll
+    if (kill) this.taps(4, 16, 34);
+    else this.taps(quality >= 0.85 ? 2 : 1, 11, 26);
   }
   gotHit(dmg: number): void {
     if (!this.playFirst(["g_hit_body"], { gain: 1, rate: dmg >= 40 ? 0.85 : 1 })) this.play("impact", { gain: 0.9, rate: 0.9 });
@@ -503,6 +505,35 @@ export class GameAudio {
     } catch {
       /* iOS has no Vibration API */
     }
+  }
+
+  private buzzUntil = 0;
+
+  /**
+   * Recoil that adds up.
+   *
+   * navigator.vibrate replaces whatever is running, so ten rounds a second used
+   * to restart a 12 ms tick ten times and feel like nothing at all. A new pulse
+   * extends the one still running instead: sustained fire becomes a rumble
+   * under the hand, a single shot stays a tap.
+   */
+  kickback(ms: number): void {
+    const now = performance.now();
+    const left = Math.max(0, this.buzzUntil - now);
+    const total = Math.min(220, left + ms);
+    this.buzzUntil = now + total;
+    this.vibrate(Math.round(total));
+  }
+
+  /** Short taps in a row — what a hit feels like, kept apart from the recoil. */
+  taps(count: number, ms = 12, gap = 28): void {
+    const pattern: number[] = [];
+    for (let i = 0; i < count; i++) {
+      pattern.push(ms);
+      if (i < count - 1) pattern.push(gap);
+    }
+    this.buzzUntil = performance.now() + pattern.reduce((a, b) => a + b, 0);
+    this.vibrate(pattern);
   }
 }
 

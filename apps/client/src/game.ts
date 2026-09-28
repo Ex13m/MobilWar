@@ -218,7 +218,8 @@ export class Game {
   private sendPos(): void {
     const fix = this.o.sensors.fix;
     if (!fix || !this.joined) return;
-    this.net.send({ type: "pos", lat: fix.lat, lon: fix.lon, acc: fix.acc, heading: this.o.sensors.orient.heading, ct: performance.now() });
+    // The heading the server stores is the one the player is looking along.
+    this.net.send({ type: "pos", lat: fix.lat, lon: fix.lon, acc: fix.acc, heading: this.aim().heading, ct: performance.now() });
   }
 
   private selectWeapon(w: WeaponId): void {
@@ -308,11 +309,11 @@ export class Game {
       return;
     }
     this.lastShotAt[w] = now;
-    const heading = this.o.sensors.orient.heading;
-    const pitch = this.o.sensors.orient.pitch;
+    const { heading, pitch } = this.aim();
     const sdef = weaponById(this.o.profile.loadout[w]);
     this.o.audio.shot(w, sdef?.pitch, this.o.profile.loadout[w], sdef?.cooldownMs);
-    this.net.send({ type: "shoot", weapon: w, heading, pitch: this.o.sensors.orient.pitch, ct: now, chargeMs: Math.round(chargeMs), zoomed: this.zoomed });
+    const claim = this.crosshairTarget();
+    this.net.send({ type: "shoot", weapon: w, heading, pitch, ct: now, chargeMs: Math.round(chargeMs), zoomed: this.zoomed, aimId: claim?.id, aimErrDeg: claim?.errDeg });
     if (this.scene) {
       if (w !== this.scene.viewmodel.current) void this.scene.viewmodel.setWeapon(w, this.o.profile.loadout[w]);
       this.scene.viewmodel.fire();
@@ -357,8 +358,41 @@ export class Game {
     }
     if (now - this.lastGrenadeAt < GAME.GRENADE.COOLDOWN_MS) return;
     this.lastGrenadeAt = now;
-    this.net.send({ type: "grenade", kind, heading: this.o.sensors.orient.heading, pitch: this.o.sensors.orient.pitch, ct: now });
+    const g = this.aim();
+    this.net.send({ type: "grenade", kind, heading: g.heading, pitch: g.pitch, ct: now });
     this.o.audio.play("g_switch", { gain: 0.6 });
+  }
+
+  /**
+   * The enemy under the crosshair, measured against the avatar as drawn — the
+   * one the player can see. Returns the id and how far off centre it was, which
+   * is what the server needs to honour the shot (see GAME.AIM.CLAIM_*).
+   */
+  private crosshairTarget(): { id: string; errDeg: number } | null {
+    if (!this.scene || this.o.playMode !== "ar") return null;
+    const a = this.aim();
+    let best: { id: string; errDeg: number } | null = null;
+    for (const e of this.world.enemies()) {
+      if (!e.alive) continue;
+      const d = Math.hypot(e.rx - this.world.me.x, e.rz - this.world.me.z);
+      if (d < 0.5 || d > GAME.RIFLE_RANGE_M) continue;
+      // horizontal error against the drawn position, plus the elevation the
+      // avatar occupies at that distance (a person is ~1.7 m tall)
+      const yaw = Math.abs(angleDiff(bearingLocal(this.world.me, { x: e.rx, z: e.rz }), a.heading));
+      const pitchTo = (Math.atan2(1.2 - 1.6, d) * 180) / Math.PI; // chest height vs eye height
+      const err = Math.hypot(yaw, a.pitch - pitchTo);
+      if (err <= GAME.AIM.CLAIM_CONE_DEG && (!best || err < best.errDeg)) best = { id: e.id, errDeg: +err.toFixed(1) };
+    }
+    return best;
+  }
+
+  /**
+   * The aim the player actually sees: the camera's own direction in AR, the
+   * filtered compass otherwise (screenless mode has no camera to ask).
+   */
+  private aim(): { heading: number; pitch: number } {
+    if (this.scene && this.o.playMode === "ar") return this.scene.aimAngles();
+    return { heading: this.o.sensors.orient.heading, pitch: this.o.sensors.orient.pitch };
   }
 
   private aimTarget(): { id: string; x: number; z: number } | null {
@@ -366,10 +400,11 @@ export class Game {
     const me = this.world.myPlayer();
     // Pointing at the sky or at your feet is a miss, so the local tracer must
     // not snap onto a target the vertical aim has already ruled out.
-    if (Math.abs(this.o.sensors.orient.pitch) > GAME.VERT_HALF_ANGLE_DEG) return null;
+    const a = this.aim();
+    if (Math.abs(a.pitch) > GAME.VERT_HALF_ANGLE_DEG) return null;
     const hot = resolveShot(
       { x: this.world.me.x, z: this.world.me.z, acc: this.world.me.acc },
-      this.o.sensors.orient.heading,
+      a.heading,
       this.world.enemies().map((e) => ({ id: e.id, x: e.rx, z: e.rz, acc: e.acc })),
       GAME.WEAPONS[w].RANGE_M,
       (d) => weaponCone(w, d, me?.bloom ?? 0, this.zoomed),
@@ -391,7 +426,7 @@ export class Game {
 
   /** Relative bearing (deg, + = right) from my view to a world point. */
   private relTo(x: number, z: number): number {
-    return angleDiff(bearingLocal(this.world.me, { x, z }), this.o.sensors.orient.heading);
+    return angleDiff(bearingLocal(this.world.me, { x, z }), this.aim().heading);
   }
 
   private onMsg(m: ServerMsg): void {

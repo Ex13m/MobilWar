@@ -41,16 +41,17 @@ export type AmmoKind = "ballistic" | "energy" | "plasma" | "rocket" | "rail";
 
 /** Muzzle velocity in m/s by class. `rail` is effectively instant. */
 /**
- * Quake's rule: a projectile you can see is a projectile you have to lead.
- * Bullets stay effectively hitscan and the rail slug is instant, but the energy
- * and plasma classes fly slowly enough that a player walking across your sight
- * at 20 m has to be aimed ahead of, not at.
+ * A projectile you can see is a projectile you have to lead — but only a
+ * little. The first pass at this was slow enough (energy 75, plasma 45) that
+ * on a phone the round felt like it was posted rather than fired; these are the
+ * speeds where a shot still reads as a streak and only a running target needs
+ * leading.
  */
 export const AMMO_SPEED: Record<AmmoKind, number> = {
   ballistic: 400,
-  energy: 75,
-  plasma: 45,
-  rocket: 24,
+  energy: 160,
+  plasma: 100,
+  rocket: 32,
   rail: 100000,
 };
 

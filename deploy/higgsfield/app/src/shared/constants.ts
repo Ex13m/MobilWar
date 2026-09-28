@@ -238,6 +238,16 @@ export const GAME = {
     PRECISION_MIN: 0.4,
     /** 1 = linear falloff; higher punishes sloppy aim harder. */
     PRECISION_K: 1,
+    /**
+     * Aiming at what the camera shows. The client may claim the player under
+     * its crosshair; the claim counts only inside CLAIM_CONE_DEG on screen, and
+     * only if the server's own bearing to that target is within
+     * CLAIM_TOLERANCE_DEG of where the shooter says they were looking — which
+     * is wide enough to absorb GPS error and narrow enough that nobody shoots
+     * someone standing behind them.
+     */
+    CLAIM_CONE_DEG: 10,
+    CLAIM_TOLERANCE_DEG: 35,
   },
   /** Client interpolation buffer (ms). */
   INTERP_DELAY_MS: 250,

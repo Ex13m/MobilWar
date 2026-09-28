@@ -129,7 +129,7 @@ export class Effects {
     // and a railgun is instant. The server keeps the real speed for damage;
     // the tracer is drawn at a capped one, held for a floor, and stretched
     // into a streak so the shot reads as a line going out, not as a dot.
-    const shown = Math.min(speed, skin === "orb" ? 45 : 120);
+    const shown = Math.min(speed, skin === "orb" ? 70 : 190);
     const dur = skin === "beam" ? 0.001 : Math.max(0.15, dist / shown);
     const tailM = skin === "beam" ? dist : skin === "streak" ? Math.min(9, Math.max(2, dist * 0.5)) : skin === "bolt" ? 1.6 : 0.9;
     this.bolts.push({ skin, mesh, core, glow, light, from: from.clone(), to: to.clone(), dist, tailM, t: 0, dur, fade: skin === "beam" ? 0.2 : 0.12, arrived: false, onArrive });

@@ -260,6 +260,25 @@ export class ArScene {
     }
   }
 
+  /**
+   * Where the crosshair actually points, read off the camera itself.
+   *
+   * This is the single source of truth for aiming. The camera is built from the
+   * raw sensor quaternion, corrected to the filtered heading, then nudged by
+   * recoil and shake; the shot used to be sent from the *filtered* sensor angles
+   * instead, so during a turn — and whenever the screen rotated — the round left
+   * along a different line than the one under the crosshair and visibly flew
+   * off to the side. Asking the camera removes the whole class of mismatch.
+   */
+  aimAngles(): { heading: number; pitch: number } {
+    const d = this.camera.getWorldDirection(this.aimTmp);
+    return {
+      heading: ((Math.atan2(d.x, -d.z) / DEG) % 360 + 360) % 360,
+      pitch: Math.asin(Math.max(-1, Math.min(1, d.y))) / DEG,
+    };
+  }
+  private aimTmp = new THREE.Vector3();
+
   /** Camera shake impulse (degrees), decays over ~0.4 s. */
   addShake(deg: number): void {
     this.shake = Math.min(4, this.shake + deg);

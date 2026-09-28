@@ -902,3 +902,61 @@ describe("приватность зоны", () => {
     expect(room.brief().distanceM).toBeUndefined();
   });
 });
+
+describe("выстрел в прицел (заявка цели)", () => {
+  function setupClaim(offsetDeg: number) {
+    const { room, pa, pb, advance, startPlaying } = setup();
+    startPlaying();
+    room.updatePosition(pa, origin.lat, origin.lon, 5, 0);
+    // the enemy stands off the shooter's heading by `offsetDeg`, 20 m out —
+    // the way GPS drift puts a player away from where the camera draws them
+    const at = destination(origin, offsetDeg, 20);
+    room.updatePosition(pb, at.lat, at.lon, 5, 180);
+    return { room, pa, pb, advance };
+  }
+
+  it("попадает в того, кто был в прицеле, даже когда GPS увёл его в сторону", () => {
+    const { room, pa, pb, advance } = setupClaim(30);
+    const hp0 = pb.hp;
+    // without a claim the shot goes by the cone: 30° off at 20 m is a miss
+    room.shoot(pa, 0, "blaster");
+    advance(GAME.RIFLE_COOLDOWN_MS + 200);
+    room.tick();
+    expect(pb.hp, "без заявки — мимо").toBe(hp0);
+    // with the crosshair claim it lands
+    room.shoot(pa, 0, "blaster", { aimId: pb.id, aimErrDeg: 1 });
+    advance(GAME.RIFLE_COOLDOWN_MS + 200);
+    room.tick();
+    expect(pb.hp, "с заявкой — попадание").toBeLessThan(hp0);
+  });
+
+  it("заявка на цель за спиной отклоняется", () => {
+    const { room, pa, pb, advance } = setupClaim(170);
+    const hp0 = pb.hp;
+    room.shoot(pa, 0, "blaster", { aimId: pb.id, aimErrDeg: 0 });
+    advance(GAME.RIFLE_COOLDOWN_MS + 200);
+    room.tick();
+    expect(pb.hp).toBe(hp0);
+  });
+
+  it("заявка вне экранного конуса не считается", () => {
+    const { room, pa, pb, advance } = setupClaim(30);
+    const hp0 = pb.hp;
+    room.shoot(pa, 0, "blaster", { aimId: pb.id, aimErrDeg: GAME.AIM.CLAIM_CONE_DEG + 5 });
+    advance(GAME.RIFLE_COOLDOWN_MS + 200);
+    room.tick();
+    expect(pb.hp).toBe(hp0);
+  });
+
+  it("точность заявки решает урон", () => {
+    const dmg = (err: number) => {
+      const { room, pa, pb, advance } = setupClaim(20);
+      const hp0 = pb.hp;
+      room.shoot(pa, 0, "blaster", { aimId: pb.id, aimErrDeg: err });
+      advance(GAME.RIFLE_COOLDOWN_MS + 200);
+      room.tick();
+      return hp0 - pb.hp;
+    };
+    expect(dmg(0)).toBeGreaterThan(dmg(GAME.AIM.CLAIM_CONE_DEG));
+  });
+});

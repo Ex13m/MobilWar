@@ -14,6 +14,7 @@ import {
   toLocal,
   uid,
   distLocal,
+  angleDiff,
   bearingLocal,
   firstBarrierOnPath,
   rayEnd,
@@ -469,7 +470,12 @@ export class Room {
     }
   }
 
-  shoot(p: Player, heading: number, weapon: WeaponId = p.weapon, opts: { chargeMs?: number; zoomed?: boolean; pitch?: number } = {}): void {
+  shoot(
+    p: Player,
+    heading: number,
+    weapon: WeaponId = p.weapon,
+    opts: { chargeMs?: number; zoomed?: boolean; pitch?: number; aimId?: string; aimErrDeg?: number } = {},
+  ): void {
     const t = this.now();
     if (this.phase !== "playing" || !p.alive || p.isReferee) return;
     if (p.outOfBoundsSince) return;
@@ -535,6 +541,11 @@ export class Room {
         .filter((o) => o.hp > 0 && o.team !== null && o.team !== p.team && (o.kind === "turret" || o.kind === "drone"))
         .map((o) => ({ id: o.id, x: o.x, z: o.z, acc: 0 })),
     ];
+    // What the shooter had under the crosshair. GPS puts a player metres away
+    // from where the camera draws them, so without this the round misses what
+    // the player was aiming at; with it, the server still decides whether the
+    // claim is believable.
+    const claimed = this.resolveClaim(p, W, opts, targets, t);
     const evt: ServerMsg = { type: "shot", weapon, weaponId: W.id, shooterId: p.id, x: p.x, z: p.z, heading: p.heading, pitch: aimPitch };
     const rounds = Math.max(1, W.burst) * Math.max(1, W.pellets);
     // burst consumes extra rounds from the magazine (pellets don't)
@@ -544,7 +555,9 @@ export class Room {
     for (let n = 0; n < rounds; n++) {
       // pellets scatter: jitter the aim inside the cone
       const jitter = W.pellets > 1 ? (this.rng() * 2 - 1) * W.cone * 0.8 : 0;
-      const hit = resolveShot({ x: p.x, z: p.z, acc: p.acc }, p.heading + jitter, targets, W.rangeM, cone, { pitch: aimPitch });
+      // The first round of a trigger honours the claim; pellets and burst
+      // rounds after it scatter as usual.
+      const hit = n === 0 && claimed ? claimed : resolveShot({ x: p.x, z: p.z, acc: p.acc }, p.heading + jitter, targets, W.rangeM, cone, { pitch: aimPitch });
       if (!hit) continue;
       const tgt = this.players.get(hit.id) ?? this.objects.get(hit.id);
       if (!tgt) continue;
@@ -611,6 +624,39 @@ export class Room {
     }
     if (extra.length) evt.extraHits = extra;
     this.broadcast(evt);
+  }
+
+  /**
+   * Check the shooter's claim about who was under their crosshair.
+   *
+   * Accepted when the target is a live enemy inside the weapon's range and the
+   * server's own bearing to it is within GAME.AIM.CLAIM_TOLERANCE_DEG of where
+   * the shooter says they were looking. That tolerance is what absorbs the GPS
+   * error; anything outside it — a target behind the shooter, out of range, or
+   * already dead — falls through to the ordinary cone.
+   */
+  private resolveClaim(
+    p: Player,
+    W: WeaponDef,
+    opts: { aimId?: string; aimErrDeg?: number },
+    targets: Array<{ id: string; x: number; z: number; acc: number }>,
+    t: number,
+  ): { id: string; dist: number; angErr: number; allowed: number; score: number } | null {
+    const id = opts.aimId;
+    if (!id) return null;
+    const onScreen = Math.abs(Number(opts.aimErrDeg ?? 0));
+    if (!Number.isFinite(onScreen) || onScreen > GAME.AIM.CLAIM_CONE_DEG) return null;
+    const tgt = targets.find((q) => q.id === id);
+    if (!tgt) return null;
+    const victim = this.players.get(id);
+    if (victim && (!victim.alive || victim.isReferee || victim.protectedUntil > t)) return null;
+    const dist = distLocal(p, tgt);
+    if (dist > W.rangeM) return null;
+    const serverErr = Math.abs(angleDiff(p.heading, bearingLocal(p, tgt)));
+    if (serverErr > GAME.AIM.CLAIM_TOLERANCE_DEG) return null;
+    // Damage follows how centred the shot was on screen, not how far the
+    // server's own idea of the target happened to drift.
+    return { id, dist, angErr: onScreen, allowed: GAME.AIM.CLAIM_CONE_DEG, score: 1 };
   }
 
   /**
