@@ -1,5 +1,5 @@
 import { AVATARS, GAME, type AvatarId, type GameMode, type PlayMode, type RoomBrief } from "@mobilwar/shared";
-import { createRoom, listRooms } from "../api.js";
+import { apiHost, createRoom, listRooms } from "../api.js";
 import { renderLoadout } from "./loadout.js";
 import { saveProfile, type Profile } from "../storage.js";
 import { showOnboarding } from "./onboarding.js";
@@ -209,10 +209,10 @@ export function showLobby(root: HTMLElement, profile: Profile, getFix: () => { l
     const poll = () =>
       listRooms(getFix())
         .then((rooms) => {
-          $("#netstat").textContent = "Сервер на связи";
+          $("#netstat").textContent = `Сервер на связи · ${apiHost()}`;
           renderRooms(rooms);
         })
-        .catch(() => ($("#netstat").textContent = "Нет связи с сервером…"));
+        .catch((e: Error) => ($("#netstat").textContent = `Нет связи с сервером (${e.message})`));
     poll();
     const timer = setInterval(poll, 5000);
     const cleanup = () => clearInterval(timer);

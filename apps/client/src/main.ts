@@ -5,6 +5,7 @@ import { loadProfile } from "./storage.js";
 import { showLobby } from "./ui/lobby.js";
 import { ONBOARDING_VERSION, showOnboarding } from "./ui/onboarding.js";
 import { checkForUpdate } from "./update.js";
+import { initApiBase } from "./api.js";
 
 const root = document.getElementById("app")!;
 const profile = loadProfile();
@@ -21,6 +22,8 @@ async function boot(): Promise<void> {
   root.innerHTML = `<div class="screen hero art-lobby"><div class="card"><h2>MobilWar</h2><p class="sub">Проверяю обновления…</p></div></div>`;
   const { reloading } = await checkForUpdate();
   if (reloading) return;
+  // Find a backend that answers before showing a lobby that cannot load zones.
+  await initApiBase();
 
   sensors.start(); // GPS starts asking permission immediately so the lobby can show nearby zones
   if ((profile.onboarded ?? 0) < ONBOARDING_VERSION) await showOnboarding(root, profile, sensors);
