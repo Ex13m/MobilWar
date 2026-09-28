@@ -467,6 +467,18 @@ export class Hud {
     for (const o of world.objects.values()) {
       const { px, py, d } = plot(o.x, o.z);
       if (d > rangeM) continue;
+      if (o.kind === "dome") {
+        // a ring: bright when ready or up, dim while it recharges
+        const now = Date.now();
+        const up = (o.activeUntil ?? 0) > now;
+        const ready = !up && (o.readyAt ?? 0) <= now;
+        c.strokeStyle = up ? "#ffffff" : ready ? "#67e8f9" : "rgba(103,232,249,0.35)";
+        c.lineWidth = up ? 2.5 : 1.5;
+        c.beginPath();
+        c.arc(px, py, 5, 0, Math.PI * 2);
+        c.stroke();
+        continue;
+      }
       c.fillStyle = o.team ? (o.team === "red" ? "#ef4444" : "#3b82f6") : "#fde047";
       if (o.team) c.fillRect(px - 3, py - 3, 6, 6);
       else {

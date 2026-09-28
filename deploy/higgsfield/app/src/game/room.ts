@@ -5,6 +5,7 @@ import {
   damageAtDistance,
   grenadeHop,
   precisionMult,
+  domeCovers,
   destination,
   fromLocal,
   haversine,
@@ -568,6 +569,13 @@ export class Room {
         this.damageObject(barrier, Math.round(W.damage / 2));
         continue;
       }
+      // A half-dome stops everything from its covered side — a rail slug too:
+      // it is a wall of energy, not cover to shoot through.
+      const dome = this.domeCovering(p, tgt, t);
+      if (dome) {
+        if (!firstDone) evt.blockedBy = dome.id;
+        continue;
+      }
       // Aim quality scales the round: dead centre is full damage, the edge of
       // what GPS allows is a graze (GAME.AIM). Healing is not scaled — a medic
       // should not be punished for the same noise.
@@ -705,6 +713,7 @@ export class Room {
       for (const q of this.players.values()) {
         if (!q.alive || q.isReferee || !shooter || !this.isEnemy(shooter, q) || q.protectedUntil > t) continue;
         if (b.skip.includes(q.id)) continue;
+        if (this.domeCovering({ x: b.x, z: b.z }, q, t)) continue;
         const d = distLocal({ x: b.x, z: b.z }, q);
         const dmg = splashDamage(d, W.splashM, W.damage, W.damageEdge);
         if (dmg > 0) this.applyHit(shooter, q, dmg, W.slot, W, t);
@@ -749,6 +758,19 @@ export class Room {
         this.broadcast({ type: "shot", weapon, weaponId: W.id, shooterId: p.id, x: victim.x, z: victim.z, heading: bearingLocal(victim, best), targetId: best.id, targetKind: "player", damage: cd });
       }
     }
+  }
+
+  /** Half-domes that are up right now. */
+  private activeDomes(t = this.now()): WorldObject[] {
+    return [...this.objects.values()].filter((o) => o.kind === "dome" && (o.activeUntil ?? 0) > t);
+  }
+
+  /** The dome, if any, that stops something coming from `from` at `target`. */
+  private domeCovering(from: { x: number; z: number }, target: { x: number; z: number }, t = this.now()): WorldObject | null {
+    for (const d of this.activeDomes(t)) {
+      if (domeCovers({ x: d.x, z: d.z, heading: d.heading ?? 0, radius: GAME.DOME.RADIUS_M }, from, target)) return d;
+    }
+    return null;
   }
 
   private barriers(): Array<WorldObject & { id: string }> {
@@ -864,6 +886,8 @@ export class Room {
         // The round arrives regardless of who is watching, but a target that
         // already died (or respawned under protection) is not hit twice.
         if (!victim.alive || victim.protectedUntil > t) continue;
+        // Made it under a dome while the round was in the air: it hits the dome.
+        if (shooter && this.domeCovering(shooter, victim, t)) continue;
         if (shooter) this.applyHit(shooter, victim, h.damage, h.weapon, W, t);
         else this.damagePlayer(victim, h.damage, null, h.weapon, W.piercesShield);
         continue;
@@ -1060,6 +1084,7 @@ export class Room {
       }
       if (q.protectedUntil > t) continue;
       if (q.team === pr.team && q.id !== pr.ownerId) continue; // no team damage; self-damage allowed
+      if (this.domeCovering({ x, z }, q, t)) continue; // sheltered from this side
       // An EMP does no damage, so the shield strip has to happen outside the
       // damage branch or a zero-damage blast would leave shields untouched.
       if (W.trait === "emp" && d <= W.splashM) {
@@ -1098,6 +1123,7 @@ export class Room {
         if (q.team === pr.team && q.id !== pr.ownerId) continue;
         const d = distLocal({ x, z }, q);
         if (d <= W.splashM || d > fragR) continue; // the core already hit them
+        if (this.domeCovering({ x, z }, q, t)) continue;
         if (victims.some((v) => v.id === q.id)) continue;
         const dmg = q.id === pr.ownerId ? Math.round(frag.fragDamage / 2) : frag.fragDamage;
         victims.push({ id: q.id, damage: dmg });
@@ -1190,6 +1216,7 @@ export class Room {
     this.projectiles.clear();
     this.lastPickupSpawn = 0;
     this.itemPoints = [];
+    this.layoutDomes();
     this.setupMode();
   }
 
@@ -1313,6 +1340,7 @@ export class Room {
     this.tickTurrets(t);
     this.tickDrones(t);
     this.tickPickups(t);
+    this.tickDomes(t);
     this.tickMode(t);
     this.lastTickAt = t;
   }
@@ -1456,6 +1484,49 @@ export class Room {
       }
     }
     this.tickItemPoints(t);
+  }
+
+  /**
+   * Two dome generators, mirrored across the lawn — one nearer each team, both
+   * off the base axis, so a team can reach its own quickly and the other's with
+   * a run.
+   */
+  private layoutDomes(): void {
+    const r = this.radiusM;
+    for (const [x, z] of [
+      [r * 0.18, -r * 0.1],
+      [-r * 0.18, r * 0.1],
+    ] as const) {
+      const id = uid("dm");
+      this.objects.set(id, { id, kind: "dome", team: null, ownerId: null, x, z, hp: 1, heading: 0, activeUntil: 0, readyAt: 0 });
+    }
+  }
+
+  /**
+   * Run up to an idle generator and it throws the dome, facing the way the
+   * runner is looking — towards whoever they are hiding from. It stands for
+   * ACTIVE_MS, drops, and needs COOLDOWN_MS before it can go up again.
+   */
+  private tickDomes(t: number): void {
+    for (const o of this.objects.values()) {
+      if (o.kind !== "dome") continue;
+      if ((o.activeUntil ?? 0) > 0 && t >= (o.activeUntil ?? 0)) {
+        o.activeUntil = 0;
+        o.readyAt = t + GAME.DOME.COOLDOWN_MS;
+        this.broadcast({ type: "event", kind: "dome_off", data: { id: o.id } });
+        continue;
+      }
+      if ((o.activeUntil ?? 0) > t || (o.readyAt ?? 0) > t) continue;
+      for (const q of this.players.values()) {
+        if (!q.alive || q.isReferee || !q.lastSample) continue;
+        if (distLocal(o, q) > GAME.DOME.TRIGGER_M) continue;
+        o.heading = q.heading;
+        o.ownerId = q.id;
+        o.activeUntil = t + GAME.DOME.ACTIVE_MS;
+        this.broadcast({ type: "event", kind: "dome_on", data: { id: o.id, by: q.id, heading: o.heading, ms: GAME.DOME.ACTIVE_MS } });
+        break;
+      }
+    }
   }
 
   /**
@@ -1799,9 +1870,12 @@ export function publicView(p: Player): PlayerPublic {
 }
 
 export function publicObject(o: WorldObject): WorldObject {
-  const { id, kind, team, ownerId, x, z, hp, heading, carriedBy, y, expiresAt, disabledUntil } = o;
+  const { id, kind, team, ownerId, x, z, hp, heading, carriedBy, y, expiresAt, disabledUntil, activeUntil, readyAt } = o;
   const out: WorldObject = { id, kind, team, ownerId, x, z, hp };
   if (disabledUntil !== undefined) out.disabledUntil = disabledUntil;
+  // domes: without these the client cannot tell a raised dome from an idle one
+  if (activeUntil !== undefined) out.activeUntil = activeUntil;
+  if (readyAt !== undefined) out.readyAt = readyAt;
   if (heading !== undefined) out.heading = heading;
   if (carriedBy !== undefined) out.carriedBy = carriedBy;
   if (y !== undefined) out.y = y;

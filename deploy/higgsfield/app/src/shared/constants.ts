@@ -229,6 +229,21 @@ export const GAME = {
    * keeps PRECISION_MIN. The hit still registers, it just grazes.
    */
   /**
+   * Dome generators on the lawn. Run up to one and it throws a half-dome — a
+   * 180° curved screen, facing the way you were looking — that stops every
+   * shot and blast coming from that side for ACTIVE_MS. You can hide behind it;
+   * so can anyone else who gets there first.
+   */
+  DOME: {
+    /** Radius of the dome, metres: who is inside is covered. */
+    RADIUS_M: 3.5,
+    /** How close you have to get to switch it on, metres. */
+    TRIGGER_M: 3,
+    ACTIVE_MS: 20000,
+    /** After it drops, how long before it can be switched on again. */
+    COOLDOWN_MS: 25000,
+  },
+  /**
    * Hard cap on the hit half-angle. Point blank needs it wide: at 45° the
    * effective radius at 5 m was 5 m, under the 8 m the GPS floor asks for, so
    * the closest range was the one that missed most.

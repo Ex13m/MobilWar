@@ -428,6 +428,28 @@ export class ArScene {
       } else if (g.userData.pickup) {
         g.rotation.y = t * 1.5;
         g.position.y = 0.6 + Math.sin(t * 2 + o.z) * 0.12;
+      } else if (o.kind === "dome") {
+        const shell = g.getObjectByName("shell");
+        const collar = g.getObjectByName("collar") as THREE.Mesh | undefined;
+        const left = (o.activeUntil ?? 0) - nowMs;
+        const up = left > 0;
+        if (shell) {
+          shell.visible = up;
+          if (up) {
+            shell.rotation.y = -((o.heading ?? 0) - 180) * DEG;
+            // pulse, and flicker for the last three seconds so nobody is surprised
+            const fading = left < 3000 ? 0.45 + 0.55 * Math.abs(Math.sin(t * 14)) : 1;
+            const skin = shell.getObjectByName("skin") as THREE.Mesh | undefined;
+            const grid = shell.getObjectByName("grid") as THREE.Mesh | undefined;
+            if (skin) (skin.material as THREE.MeshBasicMaterial).opacity = (0.13 + 0.05 * Math.sin(t * 3)) * fading;
+            if (grid) (grid.material as THREE.MeshBasicMaterial).opacity = 0.28 * fading;
+          }
+        }
+        if (collar) {
+          const ready = !up && (o.readyAt ?? 0) <= nowMs;
+          (collar.material as THREE.MeshBasicMaterial).color.set(up ? 0xffffff : ready ? 0x67e8f9 : 0x475569).multiplyScalar(ready || up ? 2 : 1);
+          collar.rotation.z = t * (ready ? 2 : 0.3);
+        }
       }
       g.visible = !(o.kind === "flag" && o.carriedBy);
     }
@@ -554,6 +576,46 @@ export class ArScene {
         holder.userData.pickup = true;
         holder.add(beam(FX.rocket));
         break;
+      case "dome": {
+        // The generator: a short pylon with a glowing collar. Always visible, so
+        // it can be run to.
+        const pylon = new THREE.Mesh(new THREE.CylinderGeometry(0.12, 0.2, 1.1, 10), new THREE.MeshStandardMaterial({ color: 0x1f2937, roughness: 0.5, metalness: 0.6 }));
+        pylon.position.y = 0.55;
+        holder.add(pylon);
+        const collar = new THREE.Mesh(new THREE.TorusGeometry(0.22, 0.04, 8, 24), new THREE.MeshBasicMaterial({ color: new THREE.Color(0x67e8f9).multiplyScalar(2), toneMapped: false }));
+        collar.rotation.x = Math.PI / 2;
+        collar.position.y = 1.0;
+        collar.name = "collar";
+        collar.layers.enable(BLOOM_LAYER);
+        holder.add(collar);
+        // The dome: a quarter sphere — half a hemisphere — so it covers exactly
+        // the 180° the server protects. Built facing +Z (heading 180); the frame
+        // loop turns it to the heading it was raised with.
+        const R = GAME.DOME.RADIUS_M;
+        const shell = new THREE.Group();
+        shell.name = "shell";
+        shell.visible = false;
+        const skin = new THREE.Mesh(
+          new THREE.SphereGeometry(R, 40, 14, 0, Math.PI, 0, Math.PI / 2),
+          new THREE.MeshBasicMaterial({ color: 0x67e8f9, transparent: true, opacity: 0.16, side: THREE.DoubleSide, depthWrite: false, blending: THREE.AdditiveBlending, toneMapped: false }),
+        );
+        skin.name = "skin";
+        const grid = new THREE.Mesh(
+          new THREE.SphereGeometry(R * 1.002, 20, 7, 0, Math.PI, 0, Math.PI / 2),
+          new THREE.MeshBasicMaterial({ color: 0x9ff3ff, wireframe: true, transparent: true, opacity: 0.28, depthWrite: false, toneMapped: false }),
+        );
+        grid.name = "grid";
+        const rim = new THREE.Mesh(
+          new THREE.TorusGeometry(R, 0.05, 6, 48, Math.PI),
+          new THREE.MeshBasicMaterial({ color: new THREE.Color(0x67e8f9).multiplyScalar(2.2), toneMapped: false }),
+        );
+        rim.rotation.x = -Math.PI / 2;
+        rim.rotation.z = Math.PI; // match the shell's +Z half
+        rim.layers.enable(BLOOM_LAYER);
+        shell.add(skin, grid, rim);
+        holder.add(shell);
+        break;
+      }
       case "shield":
       case "overcharge":
       case "supply": {

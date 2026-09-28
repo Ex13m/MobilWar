@@ -154,6 +154,27 @@ export function precisionMult(angErr: number, allowed: number): number {
   return m + (1 - m) * Math.pow(1 - off, k);
 }
 
+/**
+ * Does an active half-dome stand between a shot and its target?
+ *
+ * The dome covers the half-plane on its `heading` side: a target inside the
+ * radius is protected from anything that comes from that half (shooter or
+ * blast point on the covered side, outside the dome). A shot from behind the
+ * dome — or from inside it — goes through, which is what makes flanking it a
+ * thing.
+ */
+export function domeCovers(
+  dome: { x: number; z: number; heading: number; radius: number },
+  from: Vec2,
+  target: Vec2,
+): boolean {
+  const toTarget = distLocal(dome, target);
+  if (toTarget > dome.radius) return false;
+  const toShooter = distLocal(dome, from);
+  if (toShooter <= dome.radius) return false;
+  return Math.abs(angleDiff(dome.heading, bearingLocal(dome, from))) < 90;
+}
+
 /** Splash damage: `center` at 0 m falling linearly to `edge` at `radius`; 0 beyond. */
 export function splashDamage(dist: number, radius: number, center: number, edge: number): number {
   if (dist >= radius) return 0;

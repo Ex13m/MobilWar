@@ -399,6 +399,16 @@ export class GameAudio {
     this.vibrate(dist < 8 ? [60, 30, 40] : 15);
   }
 
+  /** A half-dome going up: a rising shimmer. */
+  domeUp(): void {
+    if (!this.playFirst(["g_hit_shield"], { gain: 0.7, rate: 0.7, reverb: 0.3 })) this.osc(220, 0.5, "sine", 0.18, 660);
+    this.taps(2, 18, 40);
+  }
+  /** A half-dome dropping: the same shimmer, falling. */
+  domeDown(): void {
+    this.osc(520, 0.4, "sine", 0.12, 160);
+  }
+
   shieldHit(): void {
     if (!this.playFirst(["g_hit_shield"], { gain: 0.8 })) this.play("zap", { gain: 0.6, rate: 1.3 });
     this.vibrate(30);

@@ -616,6 +616,20 @@ export class Game {
         if (d < r + 1.5) this.scene?.addShake(1.5);
         return;
       }
+      case "dome_on": {
+        // Someone threw a half-dome up. Who, and for how long, matters to both
+        // sides: the other team now has to go round it.
+        const mine = data?.by === this.world.myId;
+        const secs = Math.round(Number(data?.ms ?? 20000) / 1000);
+        const who = this.world.players.get(String(data?.by));
+        const ally = who && this.world.myPlayer() && who.team === this.world.myPlayer()!.team;
+        this.hud?.banner(mine ? `Купол поднят · ${secs} с` : ally ? `${who!.nick} поднял купол` : "Враг под куполом — обходи сбоку", mine || ally ? "good" : "warn", 2200);
+        this.o.audio.domeUp();
+        return;
+      }
+      case "dome_off":
+        this.o.audio.domeDown();
+        return;
       case "pickup_soon": {
         // Quake's timing game: both teams hear the clock on the big items and
         // start moving before it lands.

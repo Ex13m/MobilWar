@@ -960,3 +960,87 @@ describe("выстрел в прицел (заявка цели)", () => {
     expect(dmg(0)).toBeGreaterThan(dmg(GAME.AIM.CLAIM_CONE_DEG));
   });
 });
+
+describe("купол-щит", () => {
+  function domeSetup() {
+    const { room, pa, pb, a, advance, startPlaying } = setup();
+    startPlaying();
+    const dome = [...room.objects.values()].find((o) => o.kind === "dome")!;
+    return { room, pa, pb, a, advance, dome };
+  }
+  // place a player at local metres (x east, z south) via lat/lon
+  function putAt(room: Room, p: Player, x: number, z: number, heading = 0) {
+    const d = Math.hypot(x, z);
+    const brg = ((Math.atan2(x, -z) * 180) / Math.PI + 360) % 360;
+    const at = d < 0.01 ? origin : destination(origin, brg, d);
+    room.updatePosition(p, at.lat, at.lon, 3, heading);
+  }
+
+  it("на поле два генератора, пока никто не подбежал — купол опущен", () => {
+    const { room } = domeSetup();
+    const domes = [...room.objects.values()].filter((o) => o.kind === "dome");
+    expect(domes.length).toBe(2);
+    for (const d of domes) expect(d.activeUntil ?? 0).toBe(0);
+  });
+
+  it("добежал — купол поднялся на 20 секунд лицом туда, куда ты смотришь", () => {
+    const { room, pb, a, advance, dome } = domeSetup();
+    putAt(room, pb, dome.x, dome.z, 90);
+    advance(100);
+    room.tick();
+    expect(dome.activeUntil).toBeGreaterThan(room.nowForTest());
+    expect(dome.heading).toBe(90);
+    expect(a.inbox.some((m) => m.type === "event" && m.kind === "dome_on")).toBe(true);
+    advance(GAME.DOME.ACTIVE_MS + 10);
+    room.tick();
+    expect(dome.activeUntil).toBe(0);
+    expect(dome.readyAt).toBeGreaterThan(room.nowForTest());
+  });
+
+  it("закрывает от выстрелов с прикрытой стороны и не закрывает сзади", () => {
+    const { room, pa, pb, advance, dome } = domeSetup();
+    // B runs to the dome and looks east: the dome covers the eastern half
+    putAt(room, pb, dome.x, dome.z, 90);
+    advance(100);
+    room.tick();
+    // A fires from 15 m east — covered side
+    putAt(room, pa, dome.x + 15, dome.z, 270);
+    const hp0 = pb.hp;
+    room.shoot(pa, 270, "blaster");
+    advance(GAME.RIFLE_COOLDOWN_MS + 300);
+    room.tick();
+    expect(pb.hp, "с прикрытой стороны — в купол").toBe(hp0);
+  });
+
+  it("сзади купол не прикрывает — его можно обойти", () => {
+    const { room, pa, pb, advance, dome } = domeSetup();
+    // A starts on the west side; B raises the dome facing east
+    putAt(room, pa, dome.x - 15, dome.z, 90);
+    putAt(room, pb, dome.x, dome.z, 90);
+    advance(100);
+    room.tick();
+    expect(dome.activeUntil).toBeGreaterThan(room.nowForTest());
+    const hp0 = pb.hp;
+    room.shoot(pa, 90, "blaster");
+    advance(GAME.RIFLE_COOLDOWN_MS + 300);
+    room.tick();
+    expect(pb.hp, "сзади — попадание").toBeLessThan(hp0);
+  });
+});
+
+describe("купол в снимке мира", () => {
+  it("клиент видит, что купол поднят и куда он смотрит", () => {
+    const { room, pb, advance, startPlaying } = setup();
+    startPlaying();
+    const dome = [...room.objects.values()].find((o) => o.kind === "dome")!;
+    const d = Math.hypot(dome.x, dome.z);
+    const brg = ((Math.atan2(dome.x, -dome.z) * 180) / Math.PI + 360) % 360;
+    const at = destination(origin, brg, d);
+    room.updatePosition(pb, at.lat, at.lon, 3, 45);
+    advance(100);
+    room.tick();
+    const seen = room.snapshot().objects.find((o) => o.id === dome.id)!;
+    expect(seen.activeUntil).toBeGreaterThan(room.nowForTest());
+    expect(seen.heading).toBe(45);
+  });
+});

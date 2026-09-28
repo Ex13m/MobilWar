@@ -5,7 +5,7 @@ import type { Loadout } from "./weapons";
 export type GameMode = "tdm" | "ctf" | "koth" | "infection" | "turret_defense";
 export type PlayMode = "ar" | "screenless" | "referee";
 /** Placeable (turret/barrier/drone/medkit), mode objects (flag) and pickups. */
-export type ObjectKind = "turret" | "barrier" | "drone" | "medkit" | "flag" | "ammo" | "shield" | "overcharge" | "supply";
+export type ObjectKind = "turret" | "barrier" | "drone" | "medkit" | "flag" | "ammo" | "shield" | "overcharge" | "supply" | "dome";
 export const PICKUP_KINDS = ["medkit", "ammo", "shield", "overcharge", "supply"] as const;
 export type PickupKind = (typeof PICKUP_KINDS)[number];
 
@@ -98,6 +98,13 @@ export interface WorldObject {
   expiresAt?: number;
   /** Epoch ms until which a turret/drone is disabled by EMP. */
   disabledUntil?: number;
+  /**
+   * Dome generator: while this is in the future the half-dome is up, facing
+   * `heading`. Covers the 180° on that side; see GAME.DOME.
+   */
+  activeUntil?: number;
+  /** Dome generator: when it can be switched on again. */
+  readyAt?: number;
 }
 
 export interface BaseInfo {
@@ -368,6 +375,8 @@ export interface EventMsg {
     | "pickup"
     | "pickup_spawned"
     | "pickup_soon"
+    | "dome_on"
+    | "dome_off"
     | "respawn"
     | "reload"
     | "empty"
