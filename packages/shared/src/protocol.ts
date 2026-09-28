@@ -108,6 +108,10 @@ export interface BaseInfo {
 export interface RoomInfo {
   id: string;
   name: string;
+  /** Entry pin. Only ever sent to the creator and to players already inside. */
+  pin?: string;
+  /** Whether the zone shows up in the public list. */
+  listed?: boolean;
   mode: GameMode;
   origin: LatLon;
   radiusM: number;
@@ -120,6 +124,24 @@ export interface RoomInfo {
   playerCount: number;
   /** Team bases (local coords). Dead players respawn by walking to their base. */
   bases: Record<Team, BaseInfo>;
+}
+
+/**
+ * What a stranger is allowed to see about a room before joining it.
+ *
+ * Deliberately not a RoomInfo: the full one carries `origin`, and a public list
+ * of children's exact coordinates is not something to hand out. A brief carries
+ * a rounded distance instead, and only rooms whose creator asked to be listed
+ * appear at all.
+ */
+export interface RoomBrief {
+  id: string;
+  name: string;
+  mode: GameMode;
+  phase: "lobby" | "countdown" | "playing" | "ended";
+  playerCount: number;
+  /** Distance from the requester, rounded to 50 m. Absent if they gave no position. */
+  distanceM?: number;
 }
 
 export interface Snapshot {
@@ -135,6 +157,8 @@ export interface Snapshot {
 export interface JoinMsg {
   type: "join";
   roomId: string;
+  /** Four digits set when the room was made. Wrong or missing → the join is refused. */
+  pin?: string;
   nick: string;
   avatar: AvatarId;
   playMode: PlayMode;
@@ -221,6 +245,8 @@ export interface CreateRoomMsg {
   mode: GameMode;
   origin: LatLon;
   radiusM: number;
+  /** Show the zone in the public list. Off by default: a private game is the default. */
+  listed?: boolean;
 }
 
 export interface ListRoomsMsg {
@@ -364,7 +390,7 @@ export interface PongMsg {
 
 export interface RoomsMsg {
   type: "rooms";
-  rooms: RoomInfo[];
+  rooms: RoomBrief[];
 }
 
 export interface RoomCreatedMsg {

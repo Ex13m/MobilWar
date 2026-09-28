@@ -872,3 +872,33 @@ describe("ракета летит в прицел", () => {
     }
   });
 });
+
+describe("приватность зоны", () => {
+  it("каждая зона получает пин, и без него не войти", () => {
+    const room = new Room({ name: "x", mode: "tdm", origin, radiusM: 60 });
+    expect(room.pin).toMatch(/^\d{4}$/);
+    expect(room.checkPin(room.pin)).toBe(true);
+    expect(room.checkPin("0000" === room.pin ? "1111" : "0000")).toBe(false);
+    expect(room.checkPin(undefined)).toBe(false);
+    expect(room.checkPin(Number(room.pin))).toBe(false);
+  });
+
+  it("зона по умолчанию не попадает в общий список", () => {
+    const priv = new Room({ name: "двор", mode: "tdm", origin, radiusM: 60 });
+    const open = new Room({ name: "парк", mode: "tdm", origin, radiusM: 60, listed: true });
+    expect(priv.listed).toBe(false);
+    expect(open.listed).toBe(true);
+  });
+
+  it("краткая карточка не отдаёт ни координат, ни пина", () => {
+    const room = new Room({ name: "двор", mode: "tdm", origin, radiusM: 60, listed: true });
+    const far = destination(origin, 0, 237);
+    const b = room.brief(far) as unknown as Record<string, unknown>;
+    expect(Object.keys(b).sort()).toEqual(["distanceM", "id", "mode", "name", "phase", "playerCount"]);
+    expect(b.origin).toBeUndefined();
+    expect(b.pin).toBeUndefined();
+    // rounded to 50 m: enough to find your own lawn, not enough to find someone else's
+    expect(b.distanceM).toBe(250);
+    expect(room.brief().distanceM).toBeUndefined();
+  });
+});

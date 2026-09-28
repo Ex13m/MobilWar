@@ -38,6 +38,10 @@ interface RoomConfig {
   mode: GameMode;
   origin: LatLon;
   radiusM: number;
+  /** Four-digit entry pin; a join without it is refused. */
+  pin?: string;
+  /** Whether the zone appears in the public list. Private by default. */
+  listed?: boolean;
   createdAt: number;
 }
 
@@ -109,7 +113,7 @@ export class Room extends DurableObject<Env> {
       await this.ctx.storage.put("config", cfg);
     }
     this.config = cfg;
-    this.game = new GameRoom({ id: cfg.id, name: cfg.name, mode: cfg.mode, origin: cfg.origin, radiusM: cfg.radiusM });
+    this.game = new GameRoom({ id: cfg.id, name: cfg.name, mode: cfg.mode, origin: cfg.origin, radiusM: cfg.radiusM, pin: cfg.pin, listed: cfg.listed === true });
     await this.ctx.storage.setAlarm(Date.now() + TICK_MS);
     return this.game;
   }
@@ -173,6 +177,11 @@ export class Room extends DurableObject<Env> {
         conn.send({ type: "pong", ct: msg.ct, st: Date.now() });
         return;
       case "join": {
+        // The pin is what keeps a stranger who guessed a four-letter code out.
+        if (!game.checkPin(msg.pin)) {
+          conn.send({ type: "error", code: "bad_pin", text: "Неверный пин зоны" });
+          return;
+        }
         if (game.players.has(conn.id)) game.leave(conn.id);
         conn.deviceId = String(msg.deviceId ?? "").slice(0, 64);
         const isReferee = msg.playMode === "referee";
@@ -344,16 +353,26 @@ export class Room extends DurableObject<Env> {
       if (dirty) await this.ctx.storage.put("rooms", rooms);
       const lat = Number(url.searchParams.get("lat"));
       const lon = Number(url.searchParams.get("lon"));
-      const arr = Object.values(rooms);
-      if (Number.isFinite(lat) && Number.isFinite(lon)) {
-        const near = { lat, lon };
-        arr.sort((a, b) => haversine(near, a.origin) - haversine(near, b.origin));
-      } else arr.sort((a, b) => b.updatedAt - a.updatedAt);
-      return Response.json(arr.slice(0, 50).map(({ updatedAt: _u, ...info }) => info));
+      // Only zones whose creator asked to be listed, and only as briefs: the
+      // public list must not hand out children's coordinates or the pin.
+      const arr = Object.values(rooms).filter((r) => r.listed === true);
+      const near = Number.isFinite(lat) && Number.isFinite(lon) ? { lat, lon } : null;
+      if (near) arr.sort((a, b) => haversine(near, a.origin) - haversine(near, b.origin));
+      else arr.sort((a, b) => b.updatedAt - a.updatedAt);
+      return Response.json(
+        arr.slice(0, 50).map((r) => ({
+          id: r.id,
+          name: r.name,
+          mode: r.mode,
+          phase: r.phase,
+          playerCount: r.playerCount,
+          ...(near ? { distanceM: Math.round(haversine(near, r.origin) / 50) * 50 } : {}),
+        })),
+      );
     }
 
     if (url.pathname === "/api/rooms" && request.method === "POST") {
-      let m: { name?: string; mode?: GameMode; origin?: LatLon; radiusM?: number };
+      let m: { name?: string; mode?: GameMode; origin?: LatLon; radiusM?: number; listed?: boolean };
       try {
         m = (await request.json()) as typeof m;
       } catch {
@@ -370,6 +389,8 @@ export class Room extends DurableObject<Env> {
         mode: m.mode ?? "tdm",
         origin: { lat: m.origin.lat, lon: m.origin.lon },
         radiusM: Math.min(1000, Math.max(20, Number(m.radiusM) || GAME.DEFAULT_ZONE_RADIUS_M)),
+        pin: String(Math.floor(1000 + Math.random() * 9000)),
+        listed: m.listed === true,
         createdAt: now,
       };
       const info: RegistryEntry = {
@@ -378,6 +399,8 @@ export class Room extends DurableObject<Env> {
         mode: cfg.mode,
         origin: cfg.origin,
         radiusM: cfg.radiusM,
+        pin: cfg.pin,
+        listed: cfg.listed === true,
         phase: "lobby",
         phaseEndsAt: 0,
         score: { red: 0, blue: 0 },

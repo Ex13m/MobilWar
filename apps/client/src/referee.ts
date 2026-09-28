@@ -13,12 +13,14 @@ import { MODE_NAMES, esc } from "./ui/lobby.js";
 const root = document.getElementById("app")!;
 const params = new URLSearchParams(location.search);
 let roomId = (params.get("room") ?? "").toUpperCase();
+let pin = params.get("pin") ?? "";
 const profile = loadProfile();
 
 root.innerHTML = `
   <div class="bar">
     <b>Судья</b>
     <input id="code" placeholder="КОД" maxlength="4" style="width:90px;text-transform:uppercase" value="${esc(roomId)}" />
+    <input id="pin" placeholder="ПИН" maxlength="4" inputmode="numeric" style="width:80px" value="${esc(pin)}" />
     <button class="btn secondary" id="connect">Подключить</button>
     <select id="mode">${(Object.keys(MODE_NAMES) as GameMode[]).map((m) => `<option value="${m}">${MODE_NAMES[m]}</option>`).join("")}</select>
     <button class="btn" id="start">▶ Старт</button>
@@ -59,13 +61,14 @@ function connect(): void {
   net.connect();
 }
 function join(): void {
-  net?.send({ type: "join", roomId, nick: "Судья", avatar: "robot", playMode: "referee", deviceId: profile.deviceId + "_ref" });
+  net?.send({ type: "join", roomId, pin, nick: "Судья", avatar: "robot", playMode: "referee", deviceId: profile.deviceId + "_ref" });
 }
 if (roomId) connect();
 
 $("#connect").addEventListener("click", () => {
   roomId = $<HTMLInputElement>("#code").value.trim().toUpperCase();
-  history.replaceState(null, "", `?room=${roomId}`);
+  pin = $<HTMLInputElement>("#pin").value.trim();
+  history.replaceState(null, "", `?room=${roomId}&pin=${pin}`);
   connect();
 });
 $("#start").addEventListener("click", () => net?.send({ type: "ref", cmd: "start" }));

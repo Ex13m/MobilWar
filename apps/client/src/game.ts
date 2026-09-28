@@ -21,6 +21,8 @@ export interface GameOptions {
   audio: GameAudio;
   profile: Profile;
   roomId: string;
+  /** Entry pin of the zone, checked by the server on every join. */
+  pin: string;
   playMode: PlayMode;
   onExit(): void;
 }
@@ -210,7 +212,7 @@ export class Game {
 
   private join(): void {
     const { profile, roomId, playMode } = this.o;
-    this.net.send({ type: "join", roomId, nick: profile.nick, avatar: profile.avatar, playMode, deviceId: profile.deviceId, loadout: profile.loadout });
+    this.net.send({ type: "join", roomId, pin: this.o.pin, nick: profile.nick, avatar: profile.avatar, playMode, deviceId: profile.deviceId, loadout: profile.loadout });
   }
 
   private sendPos(): void {
@@ -462,7 +464,7 @@ export class Game {
         }
         if (m.code === "cant_place") this.o.audio.empty();
         this.hud?.banner(m.text, "warn", 3000);
-        if (m.code === "no_room" || m.code === "kicked" || m.code === "room_full") {
+        if (m.code === "no_room" || m.code === "kicked" || m.code === "room_full" || m.code === "bad_pin") {
           alert(m.text);
           this.exit();
         }

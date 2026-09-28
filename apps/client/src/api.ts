@@ -1,4 +1,4 @@
-import type { GameMode, LatLon, RoomInfo } from "@mobilwar/shared";
+import type { GameMode, LatLon, RoomBrief, RoomInfo } from "@mobilwar/shared";
 
 /**
  * Backend base URL. Priority:
@@ -17,14 +17,14 @@ export function wsUrlFor(roomId: string): string {
   return `${apiBase().replace(/^http/, "ws")}/ws/${encodeURIComponent(roomId.toUpperCase())}`;
 }
 
-export async function listRooms(near?: LatLon | null): Promise<RoomInfo[]> {
+export async function listRooms(near?: LatLon | null): Promise<RoomBrief[]> {
   const q = near ? `?lat=${near.lat}&lon=${near.lon}` : "";
   const r = await fetch(`${apiBase()}/api/rooms${q}`, { cache: "no-store" });
   if (!r.ok) throw new Error(`rooms ${r.status}`);
-  return (await r.json()) as RoomInfo[];
+  return (await r.json()) as RoomBrief[];
 }
 
-export async function createRoom(body: { name: string; mode: GameMode; origin: LatLon; radiusM: number }): Promise<RoomInfo> {
+export async function createRoom(body: { name: string; mode: GameMode; origin: LatLon; radiusM: number; listed?: boolean }): Promise<RoomInfo> {
   const r = await fetch(`${apiBase()}/api/rooms`, {
     method: "POST",
     headers: { "content-type": "application/json" },

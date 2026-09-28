@@ -61,13 +61,14 @@ export function createApp(opts: { dbPath?: string } = {}) {
       req.on("data", (c) => (body += c));
       req.on("end", () => {
         try {
-          const m = JSON.parse(body || "{}") as { name?: string; mode?: string; origin?: { lat: number; lon: number }; radiusM?: number };
+          const m = JSON.parse(body || "{}") as { name?: string; mode?: string; origin?: { lat: number; lon: number }; radiusM?: number; listed?: boolean };
           if (!m.origin || !Number.isFinite(m.origin.lat) || !Number.isFinite(m.origin.lon)) throw new Error("bad_origin");
           const room = rooms.create({
             name: String(m.name ?? "Зона").slice(0, 32) || "Зона",
             mode: (m.mode as import("@mobilwar/shared").GameMode) ?? "tdm",
             origin: { lat: m.origin.lat, lon: m.origin.lon },
             radiusM: Number(m.radiusM) || GAME.DEFAULT_ZONE_RADIUS_M,
+            listed: m.listed === true,
           });
           log.info("room created (http)", room.id, room.name, room.mode);
           res.writeHead(201, { "content-type": "application/json" });
@@ -165,6 +166,7 @@ export function createApp(opts: { dbPath?: string } = {}) {
           mode: msg.mode ?? "tdm",
           origin: { lat: msg.origin.lat, lon: msg.origin.lon },
           radiusM: Number(msg.radiusM) || GAME.DEFAULT_ZONE_RADIUS_M,
+          listed: msg.listed === true,
         });
         log.info("room created", room.id, room.name, room.mode);
         conn.send({ type: "room_created", room: room.info() });
@@ -174,6 +176,12 @@ export function createApp(opts: { dbPath?: string } = {}) {
         const room = rooms.get(msg.roomId || conn.pathRoom || "");
         if (!room) {
           conn.send({ type: "error", code: "no_room", text: "Комната не найдена" });
+          return;
+        }
+        // The pin is what keeps a stranger who guessed a four-letter code out of
+        // a game between children.
+        if (!room.checkPin(msg.pin)) {
+          conn.send({ type: "error", code: "bad_pin", text: "Неверный пин зоны" });
           return;
         }
         if (conn.room) {

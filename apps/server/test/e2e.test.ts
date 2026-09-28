@@ -46,18 +46,28 @@ describe("e2e over WebSocket", () => {
     ref.send({ type: "create_room", name: "Двор", mode: "tdm", origin, radiusM: 120 });
     const created = await ref.wait("room_created");
     const roomId = created.room.id;
+    const pin = created.room.pin!;
     expect(roomId).toHaveLength(4);
-    ref.send({ type: "join", roomId, nick: "Судья", avatar: "robot", playMode: "referee", deviceId: "ref" });
+    expect(pin).toMatch(/^\d{4}$/);
+    ref.send({ type: "join", roomId, pin, nick: "Судья", avatar: "robot", playMode: "referee", deviceId: "ref" });
     await ref.wait("welcome");
 
     const a = new C();
     const b = new C();
     await Promise.all([a.open(), b.open()]);
-    a.send({ type: "join", roomId, nick: "A", avatar: "scout", playMode: "ar", deviceId: "da", team: "red" });
-    b.send({ type: "join", roomId, nick: "B", avatar: "heavy", playMode: "screenless", deviceId: "db", team: "blue" });
+    a.send({ type: "join", roomId, pin, nick: "A", avatar: "scout", playMode: "ar", deviceId: "da", team: "red" });
+    b.send({ type: "join", roomId, pin, nick: "B", avatar: "heavy", playMode: "screenless", deviceId: "db", team: "blue" });
     const wa = await a.wait("welcome");
     await b.wait("welcome");
     expect(wa.room.id).toBe(roomId);
+
+    // a stranger who guessed the code still cannot get in
+    const x = new C();
+    await x.open();
+    x.send({ type: "join", roomId, pin: "0000", nick: "Чужой", avatar: "scout", playMode: "ar", deviceId: "dx" });
+    const refused = await x.wait("error");
+    expect(refused.code).toBe("bad_pin");
+    expect([...app.rooms.get(roomId)!.players.values()].some((p) => p.nick === "Чужой")).toBe(false);
 
     // health endpoint
     const h = await fetch(`http://127.0.0.1:${port}/health`).then((r) => r.json());
@@ -104,18 +114,24 @@ describe("e2e over WebSocket", () => {
     const r = await fetch(`http://127.0.0.1:${port}/api/rooms`, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ name: "HTTP", mode: "koth", origin, radiusM: 80 }),
+      body: JSON.stringify({ name: "HTTP", mode: "koth", origin, radiusM: 80, listed: true }),
     });
     expect(r.status).toBe(201);
-    const info = (await r.json()) as { id: string; mode: string };
+    const info = (await r.json()) as { id: string; mode: string; pin: string };
     expect(info.mode).toBe("koth");
+    expect(info.pin).toMatch(/^\d{4}$/);
     const c = new C(`/ws/${info.id.toLowerCase()}`);
     await c.open();
-    c.send({ type: "join", roomId: "", nick: "P", avatar: "ninja", playMode: "ar", deviceId: "dp" });
+    c.send({ type: "join", roomId: "", pin: info.pin, nick: "P", avatar: "ninja", playMode: "ar", deviceId: "dp" });
     const w = await c.wait("welcome");
     expect(w.room.id).toBe(info.id);
-    const list = (await fetch(`http://127.0.0.1:${port}/api/rooms?lat=${origin.lat}&lon=${origin.lon}`).then((x) => x.json())) as Array<{ id: string }>;
-    expect(list.some((x) => x.id === info.id)).toBe(true);
+    // the public list carries no coordinates and no pin
+    const list = (await fetch(`http://127.0.0.1:${port}/api/rooms?lat=${origin.lat}&lon=${origin.lon}`).then((x) => x.json())) as Array<Record<string, unknown>>;
+    const row = list.find((x) => x.id === info.id)!;
+    expect(row).toBeTruthy();
+    expect(row.origin).toBeUndefined();
+    expect(row.pin).toBeUndefined();
+    expect(row.distanceM).toBe(0);
     c.ws.close();
   });
 });

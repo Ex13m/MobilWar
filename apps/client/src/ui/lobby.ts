@@ -1,4 +1,4 @@
-import { AVATARS, GAME, type AvatarId, type GameMode, type PlayMode, type RoomInfo } from "@mobilwar/shared";
+import { AVATARS, GAME, type AvatarId, type GameMode, type PlayMode, type RoomBrief } from "@mobilwar/shared";
 import { createRoom, listRooms } from "../api.js";
 import { renderLoadout } from "./loadout.js";
 import { saveProfile, type Profile } from "../storage.js";
@@ -8,6 +8,8 @@ import { BUILD_ID } from "../update.js";
 export interface LobbyResult {
   roomId: string;
   playMode: PlayMode;
+  /** Entry pin of the zone; the server refuses a join without it. */
+  pin: string;
 }
 
 const AVATAR_NAMES: Record<AvatarId, string> = {
@@ -32,6 +34,7 @@ export function showLobby(root: HTMLElement, profile: Profile, getFix: () => { l
   return new Promise((resolve) => {
     const params = new URLSearchParams(location.search);
     const preRoom = (params.get("room") ?? profile.lastRoom ?? "").toUpperCase();
+    const prePin = params.get("pin") ?? profile.lastPin ?? "";
     root.innerHTML = `
       <div class="screen hero art-lobby">
         <h1>MobilWar</h1>
@@ -55,8 +58,10 @@ export function showLobby(root: HTMLElement, profile: Profile, getFix: () => { l
           <h2>Войти по коду</h2>
           <div class="row">
             <input id="code" maxlength="4" placeholder="КОД" style="text-transform:uppercase;letter-spacing:.2em;font-weight:700" value="${esc(preRoom)}" />
+            <input id="pin" maxlength="4" inputmode="numeric" placeholder="ПИН" style="letter-spacing:.2em;font-weight:700;max-width:110px" value="${esc(prePin)}" />
             <button class="btn" id="join">Играть</button>
           </div>
+          <p class="hint">Код и пин говорит тот, кто создал зону. Без пина в чужую игру не войти.</p>
           <div class="error" id="err"></div>
         </div>
         <div class="card">
@@ -71,6 +76,8 @@ export function showLobby(root: HTMLElement, profile: Profile, getFix: () => { l
           <select id="rmode">${(Object.keys(MODE_NAMES) as GameMode[]).map((m) => `<option value="${m}">${MODE_NAMES[m]}</option>`).join("")}</select>
           <label>Радиус зоны, м (центр — там, где ты стоишь)</label>
           <input id="rradius" type="number" min="20" max="500" value="${GAME.DEFAULT_ZONE_RADIUS_M}" />
+          <label class="row-check"><input id="rlisted" type="checkbox" /> Показывать зону в общем списке</label>
+          <p class="hint">По умолчанию выключено: зона приватная, войти можно только по коду и пину. Включай, только если зовёшь незнакомых.</p>
           <div style="height:12px"></div>
           <button class="btn secondary block" id="create">Создать и войти</button>
           <p class="hint" style="margin-top:8px">Судья: открой <b>/referee.html?room=КОД</b> на планшете.</p>
@@ -119,20 +126,26 @@ export function showLobby(root: HTMLElement, profile: Profile, getFix: () => { l
       return true;
     }
 
-    function go(roomId: string): void {
+    function go(roomId: string, pin: string): void {
       profile.lastRoom = roomId;
+      profile.lastPin = pin;
       saveProfile(profile);
-      resolve({ roomId, playMode: profile.playMode });
+      resolve({ roomId, playMode: profile.playMode, pin });
     }
 
     $("#join").addEventListener("click", () => {
       if (!commitProfile()) return;
       const code = $<HTMLInputElement>("#code").value.trim().toUpperCase();
+      const pin = $<HTMLInputElement>("#pin").value.trim();
       if (code.length < 3) {
         err.textContent = "Введи код зоны";
         return;
       }
-      go(code);
+      if (!/^\d{4}$/.test(pin)) {
+        err.textContent = "Введи пин зоны — четыре цифры";
+        return;
+      }
+      go(code, pin);
     });
 
     $("#create").addEventListener("click", () => {
@@ -148,13 +161,31 @@ export function showLobby(root: HTMLElement, profile: Profile, getFix: () => { l
         mode: $<HTMLSelectElement>("#rmode").value as GameMode,
         origin: fix,
         radiusM: Number($<HTMLInputElement>("#rradius").value) || GAME.DEFAULT_ZONE_RADIUS_M,
+        listed: $<HTMLInputElement>("#rlisted").checked,
       })
-        .then((room) => go(room.id))
+        .then((room) => showCode(room))
         .catch((e: Error) => (err.textContent = `Не удалось создать зону: ${e.message}`));
     });
 
+    /**
+     * After creating a zone: show the code and the pin big, because these two
+     * are what the child reads out to the others. Nothing starts until they tap.
+     */
+    function showCode(room: { id: string; pin?: string; listed?: boolean }): void {
+      const pin = room.pin ?? "";
+      root.innerHTML = `<div class="screen hero art-start"><div class="card">
+        <h2>Зона создана</h2>
+        <p class="sub">Продиктуй эти два числа тем, кто играет с тобой. Без них в игру не войти.</p>
+        <div class="bigcode"><span>КОД</span><b>${esc(room.id)}</b></div>
+        <div class="bigcode"><span>ПИН</span><b>${esc(pin)}</b></div>
+        <p class="hint">${room.listed ? "Зона видна в общем списке." : "Зона приватная: её нет в списке, вход только по коду и пину."}</p>
+        <button class="btn block" id="entergame">Войти в бой</button>
+      </div></div>`;
+      root.querySelector("#entergame")!.addEventListener("click", () => go(room.id, pin));
+    }
+
     const roomsEl = $("#rooms");
-    function renderRooms(rooms: RoomInfo[]): void {
+    function renderRooms(rooms: RoomBrief[]): void {
       if (!rooms.length) {
         roomsEl.innerHTML = `<span class="hint">Пока пусто — создай зону</span>`;
         return;
@@ -163,14 +194,17 @@ export function showLobby(root: HTMLElement, profile: Profile, getFix: () => { l
         .slice(0, 8)
         .map(
           (r) =>
-            `<div class="room" data-id="${r.id}"><div><b>${esc(r.name)}</b><br><small>${MODE_NAMES[r.mode]} · ${r.playerCount} игр. · ${r.phase === "playing" ? "идёт бой" : "лобби"}</small></div><b>${r.id}</b></div>`,
+            `<div class="room" data-id="${r.id}"><div><b>${esc(r.name)}</b><br><small>${MODE_NAMES[r.mode]} · ${r.playerCount} игр. · ${r.phase === "playing" ? "идёт бой" : "лобби"}${r.distanceM !== undefined ? ` · ~${r.distanceM} м` : ""}</small></div><b>${r.id}</b></div>`,
         )
         .join("");
     }
     roomsEl.addEventListener("click", (e) => {
+      // A listed zone still needs its pin: tapping it only fills the code in.
       const el = (e.target as HTMLElement).closest<HTMLElement>(".room");
-      if (!el || !commitProfile()) return;
-      go(el.dataset.id!);
+      if (!el) return;
+      $<HTMLInputElement>("#code").value = el.dataset.id!;
+      $<HTMLInputElement>("#pin").focus();
+      err.textContent = "Спроси пин у того, кто создал зону";
     });
     const poll = () =>
       listRooms(getFix())

@@ -8,6 +8,8 @@ export interface Profile {
   avatar: AvatarId;
   playMode: PlayMode;
   lastRoom?: string;
+  /** Pin of the last room, so a reconnect does not ask a child to type it again. */
+  lastPin?: string;
   loadout: Loadout;
   /** Version of the onboarding the player has completed; 0 = never played. */
   onboarded: number;

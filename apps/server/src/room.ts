@@ -39,6 +39,7 @@ import {
   type PlayerPublic,
   type PosSample,
   type RoomInfo,
+  type RoomBrief,
   type ServerMsg,
   type Snapshot,
   type Team,
@@ -199,9 +200,13 @@ export class Room {
   private itemPoints: Array<{ kind: PickupKind; x: number; z: number; nextAt: number; objId: string | null; warned: boolean }> = [];
   private lastTickAt = 0;
   private rng = mulberry32(Date.now() & 0xffffffff);
+  /** Four-digit entry pin, generated with the room; the way a stranger is kept out. */
+  readonly pin: string;
+  /** Whether the zone is advertised in the public list. Private by default. */
+  listed = false;
 
   constructor(
-    opts: { id?: string; name: string; mode: GameMode; origin: LatLon; radiusM: number; polygon?: LatLon[] },
+    opts: { id?: string; name: string; mode: GameMode; origin: LatLon; radiusM: number; polygon?: LatLon[]; pin?: string; listed?: boolean },
     private events: RoomEvents = {},
     private now: () => number = Date.now,
   ) {
@@ -211,14 +216,24 @@ export class Room {
     this.origin = opts.origin;
     this.radiusM = Math.min(1000, Math.max(20, opts.radiusM));
     this.polygon = opts.polygon;
+    this.pin = /^\d{4}$/.test(opts.pin ?? "") ? opts.pin! : String(Math.floor(1000 + Math.random() * 9000));
+    this.listed = opts.listed === true;
+  }
+
+  /** The pin a joining player must present. */
+  checkPin(given: unknown): boolean {
+    return typeof given === "string" && given === this.pin;
   }
 
   /* ---------------- info ---------------- */
 
+  /** Everything about the room — including the pin, so it only goes to people inside. */
   info(): RoomInfo {
     return {
       id: this.id,
       name: this.name,
+      pin: this.pin,
+      listed: this.listed,
       mode: this.mode,
       origin: this.origin,
       radiusM: this.radiusM,
@@ -229,6 +244,23 @@ export class Room {
       playerCount: [...this.players.values()].filter((p) => !p.isReferee).length,
       bases: this.bases(),
     };
+  }
+
+  /**
+   * What a stranger may see: no coordinates, no pin. `near` becomes a distance
+   * rounded to 50 m — enough to recognise your own lawn in a list, not enough
+   * to find somebody else's children.
+   */
+  brief(near?: LatLon): RoomBrief {
+    const b: RoomBrief = {
+      id: this.id,
+      name: this.name,
+      mode: this.mode,
+      phase: this.phase,
+      playerCount: [...this.players.values()].filter((p) => !p.isReferee).length,
+    };
+    if (near) b.distanceM = Math.round(haversine(near, this.origin) / 50) * 50;
+    return b;
   }
 
   /** Team bases: red north, blue south, at 55 % of the zone radius. */

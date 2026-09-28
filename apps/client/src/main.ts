@@ -34,6 +34,7 @@ async function boot(): Promise<void> {
       audio,
       profile,
       roomId: res.roomId,
+      pin: res.pin,
       playMode: res.playMode,
       onExit: () => {
         /* loop continues to lobby */
