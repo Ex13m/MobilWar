@@ -93,20 +93,26 @@ export class Effects {
    * real one for damage.
    */
   bolt(from: THREE.Vector3, to: THREE.Vector3, color: number, speed = 70, onArrive?: () => void, skin: BoltSkin = "streak"): void {
-    const hot = new THREE.Color(color).multiplyScalar(3.5);
-    const mat = new THREE.MeshBasicMaterial({ color: hot, transparent: true, opacity: 0.95, blending: THREE.AdditiveBlending, depthWrite: false, toneMapped: false });
+    // Colour belongs to the halo, not to the round. A saturated additive blob
+    // reads flat — what gives a bolt volume is a near-white body inside a
+    // coloured glow, which is how the TreaskaAr bolts are built (core 0xffb070
+    // inside a 0xff3020 glow). 3.5× on the body was pure wash.
+    const hot = new THREE.Color(color).multiplyScalar(1.15);
+    const mat = new THREE.MeshBasicMaterial({ color: hot, transparent: true, opacity: 0.8, blending: THREE.AdditiveBlending, depthWrite: false, toneMapped: false });
     const mesh = new THREE.Mesh(this.boltGeo, mat);
     mesh.position.copy(from);
     mesh.lookAt(to);
     mesh.scale.set(1, 1, 0.02);
-    const glow = new THREE.Sprite(new THREE.SpriteMaterial({ map: this.glowTex, color: new THREE.Color(color).multiplyScalar(2.5), transparent: true, blending: THREE.AdditiveBlending, depthWrite: false, opacity: 0.9, toneMapped: false }));
-    glow.scale.setScalar(skin === "orb" ? 1.3 : skin === "bolt" ? 0.95 : 0.8);
+    const glow = new THREE.Sprite(new THREE.SpriteMaterial({ map: this.glowTex, color: new THREE.Color(color).multiplyScalar(1.8), transparent: true, blending: THREE.AdditiveBlending, depthWrite: false, opacity: 0.75, toneMapped: false }));
+    // A small halo around a solid body, not a smear that swallows it.
+    glow.scale.setScalar(skin === "orb" ? 0.8 : skin === "bolt" ? 0.5 : 0.42);
     glow.position.copy(from);
     // The solid part of an energy round or a plasma ball: a real object in the
     // air rather than a smear, which is what makes it read as 3D.
     let core: THREE.Object3D | null = null;
     if (skin === "bolt" || skin === "orb") {
-      const cm = new THREE.MeshBasicMaterial({ color: new THREE.Color(0xffffff).lerp(new THREE.Color(color), 0.35), toneMapped: false });
+      // opaque, barely tinted: this is the part the eye reads as an object
+      const cm = new THREE.MeshBasicMaterial({ color: new THREE.Color(0xffffff).lerp(new THREE.Color(color), 0.22), toneMapped: false });
       core = new THREE.Mesh(skin === "orb" ? this.orbGeo : this.coreGeo, cm);
       if (skin === "bolt") {
         core.scale.set(1, 1, 0.55);

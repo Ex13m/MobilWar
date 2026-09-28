@@ -325,7 +325,7 @@ export class Game {
         // straight and the next one sideways: whether it bent at all depended
         // on that weapon's cone against GPS noise.
         const claimed = claim ? this.world.players.get(claim.id) : undefined;
-        const hot = claimed ? { x: claimed.rx, z: claimed.rz } : null;
+        const hot = claimed ? { x: claimed.sx, z: claimed.sz } : null;
         const color = def?.color ?? WEAPON_PRESETS[w].boltColor;
         const n = def ? Math.max(1, def.pellets) : 1;
         for (let i = 0; i < n; i++) {
@@ -378,11 +378,11 @@ export class Game {
     let best: { id: string; errDeg: number } | null = null;
     for (const e of this.world.enemies()) {
       if (!e.alive) continue;
-      const d = Math.hypot(e.rx - this.world.me.x, e.rz - this.world.me.z);
+      const d = Math.hypot(e.sx - this.world.me.x, e.sz - this.world.me.z);
       if (d < 0.5 || d > GAME.RIFLE_RANGE_M) continue;
       // horizontal error against the drawn position, plus the elevation the
       // avatar occupies at that distance (a person is ~1.7 m tall)
-      const yaw = Math.abs(angleDiff(bearingLocal(this.world.me, { x: e.rx, z: e.rz }), a.heading));
+      const yaw = Math.abs(angleDiff(bearingLocal(this.world.me, { x: e.sx, z: e.sz }), a.heading));
       const pitchTo = (Math.atan2(1.2 - 1.6, d) * 180) / Math.PI; // chest height vs eye height
       const err = Math.hypot(yaw, a.pitch - pitchTo);
       if (err <= GAME.AIM.CLAIM_CONE_DEG && (!best || err < best.errDeg)) best = { id: e.id, errDeg: +err.toFixed(1) };

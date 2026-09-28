@@ -10,6 +10,9 @@ import {
   type WorldObject,
 } from "@mobilwar/shared";
 
+/** GPS wobble under this (metres) does not move a drawn player. */
+const DISPLAY_DEADZONE_M = 0.9;
+
 interface Sample {
   t: number;
   x: number;
@@ -21,6 +24,12 @@ export interface RemotePlayer extends PlayerPublic {
   /** Interpolated render position. */
   rx: number;
   rz: number;
+  /**
+   * Where the player is *drawn*: the interpolated position with GPS wobble held
+   * in a dead zone. Aiming works against this, because it is what the eye sees.
+   */
+  sx: number;
+  sz: number;
   rheading: number;
   buf: Sample[];
 }
@@ -53,7 +62,7 @@ export class WorldState {
       seen.add(p.id);
       let rp = this.players.get(p.id);
       if (!rp) {
-        rp = { ...p, rx: p.x, rz: p.z, rheading: p.heading, buf: [] };
+        rp = { ...p, rx: p.x, rz: p.z, sx: p.x, sz: p.z, rheading: p.heading, buf: [] };
         this.players.set(p.id, rp);
       }
       Object.assign(rp, p);
@@ -119,6 +128,23 @@ export class WorldState {
       p.rheading = (a.heading + dh * k + 360) % 360;
       // drop old samples
       while (b.length > 2 && b[1]!.t < rt - 1000) b.shift();
+    }
+    // What gets drawn. A standing player's GPS wanders a couple of metres;
+    // drawn raw, the avatar swims across the crosshair and there is nothing to
+    // settle the aim on. Small wobble stays inside a dead zone, real movement is
+    // followed quickly — the target sits still until the person actually walks.
+    for (const p of this.players.values()) {
+      const dx = p.rx - p.sx;
+      const dz = p.rz - p.sz;
+      const gap = Math.hypot(dx, dz);
+      if (!Number.isFinite(p.sx) || !Number.isFinite(p.sz) || gap > 6) {
+        p.sx = p.rx;
+        p.sz = p.rz;
+      } else if (gap > DISPLAY_DEADZONE_M) {
+        const f = Math.min(1, (gap - DISPLAY_DEADZONE_M) / gap + 0.08);
+        p.sx += dx * f;
+        p.sz += dz * f;
+      }
     }
     // projectiles: dead-reckon along heading between snapshots (smooth flight)
     const dtSnap = Math.max(0, (serverNow - this.lastSnapT) / 1000);

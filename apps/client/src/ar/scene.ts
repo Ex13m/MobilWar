@@ -118,9 +118,11 @@ export class ArScene {
     const bloom = new BloomEffect({
       blendFunction: BlendFunction.ADD,
       mipmapBlur: true,
-      luminanceThreshold: 1.0,
-      luminanceSmoothing: 0.05,
-      intensity: 0.7,
+      // A higher gate and a weaker bloom: at 1.0/0.7 every coloured bolt bled
+      // into a smear and the picture lost its shape.
+      luminanceThreshold: 1.35,
+      luminanceSmoothing: 0.08,
+      intensity: 0.45,
       radius: 0.5,
       levels: 5,
     });
@@ -245,13 +247,49 @@ export class ArScene {
     this.tmpQ.multiply(this.q0.setFromAxisAngle(this.zee, -screenAngle));
     this.fwd.set(0, 0, -1).applyQuaternion(this.tmpQ);
     const yawNow = Math.atan2(this.fwd.x, -this.fwd.z) / DEG;
+
+    // Motion and calibration are separated. The raw sensor quaternion moves the
+    // camera — instantly, with nothing smoothed into it — and the compass only
+    // says where north is, which drifts slowly. The old code corrected yaw to
+    // the *filtered* compass every frame, so the crosshair trailed every turn
+    // by the filter's lag and swam with its noise at rest.
+    const target = ((o.headingRaw - yawNow + 540) % 360) - 180;
+    if (!this.yawCalInit) {
+      this.yawCal = target;
+      this.yawCalInit = true;
+    } else {
+      const d = ((target - this.yawCal + 540) % 360) - 180;
+      this.yawCal += d * Math.min(1, this.lastDt * 0.9); // ~1 s to follow a compass correction
+    }
+    const yawQ = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), -this.yawCal * DEG);
+    const raw = yawQ.multiply(this.tmpQ);
+
+    // The TreaskaAr filter: on a fast swing, a little prediction cancels the
+    // sensor's latency; at rest, heavy smoothing kills the jitter so the
+    // crosshair settles on a target and stays there. Both fade by angular speed.
+    if (this.camPrevInit) {
+      this.qInv.copy(this.camPrevRaw).invert();
+      this.qDelta.copy(raw).multiply(this.qInv);
+      this.camPrevRaw.copy(raw);
+      const ang = 2 * Math.acos(Math.min(1, Math.abs(this.qDelta.w)));
+      const predK = ang < 0.4 ? 0.22 * Math.max(0, Math.min(1, (ang - 0.006) / 0.03)) : 0;
+      if (predK > 0.001) raw.premultiply(this.qPred.identity().slerp(this.qDelta, predK));
+      const smK = 0.4 * (1 - Math.max(0, Math.min(1, (ang - 0.0015) / 0.011)));
+      if (smK > 0.001) raw.slerp(this.camDisp, smK);
+    } else {
+      this.camPrevRaw.copy(raw);
+      this.camPrevInit = true;
+    }
+    this.camDisp.copy(raw);
+
+    // recoil and shake ride on top and never feed back into the filter
     const kick = this.viewmodel.cameraKick();
     const shakeP = this.shake * (Math.random() - 0.5) * 2;
     const shakeY = this.shake * (Math.random() - 0.5) * 2;
-    const corr = ((headingDeg - yawNow + kick.yaw + shakeY + 540) % 360) - 180;
-    const yawQ = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), -corr * DEG);
+    const kickYawQ = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), -(kick.yaw + shakeY) * DEG);
     const pitchQ = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1, 0, 0), (kick.pitch + shakeP) * DEG);
-    this.camera.quaternion.copy(yawQ.multiply(this.tmpQ).multiply(pitchQ));
+    this.camera.quaternion.copy(kickYawQ.multiply(raw).multiply(pitchQ));
+    void headingDeg;
     const fov = 65 / this.zoom;
     if (Math.abs(this.camera.fov - fov) > 0.01) {
       this.camera.fov = fov;
@@ -278,6 +316,15 @@ export class ArScene {
     };
   }
   private aimTmp = new THREE.Vector3();
+  // camera filter state (see updateView)
+  private yawCal = 0;
+  private yawCalInit = false;
+  private camPrevInit = false;
+  private camPrevRaw = new THREE.Quaternion();
+  private camDisp = new THREE.Quaternion();
+  private qInv = new THREE.Quaternion();
+  private qDelta = new THREE.Quaternion();
+  private qPred = new THREE.Quaternion();
 
   /** Camera shake impulse (degrees), decays over ~0.4 s. */
   addShake(deg: number): void {
@@ -310,7 +357,7 @@ export class ArScene {
         n = { group, label, avatar: p.avatar, team: p.team, hp: p.hp, shield: p.shield, nick: p.nick, bubble, flashUntil: 0 };
         this.players.set(p.id, n);
       }
-      n.group.position.set(p.rx, 0, p.rz);
+      n.group.position.set(p.sx, 0, p.sz);
       n.group.rotation.y = -p.rheading * DEG;
       n.group.visible = p.alive;
       if (p.hp < n.hp) n.flashUntil = t + 0.12;

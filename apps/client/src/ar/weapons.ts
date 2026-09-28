@@ -338,6 +338,7 @@ export class Viewmodel {
     this.flashLight.intensity = 60;
     this.slideT = 1;
     this.spinV = Math.max(this.spinV, 34);
+    this.shotIdx++;
     if (this.weapon !== "rocket") this.ejectCasing();
   }
 
@@ -383,10 +384,26 @@ export class Viewmodel {
     if (any) this.casings.instanceMatrix.needsUpdate = true;
   }
 
-  /** World position of the muzzle (for spawning bolts). */
+  /**
+   * World position of the muzzle for the round about to leave.
+   *
+   * Rounds do not all leave the same point: a rotary cluster fires around its
+   * ring, a twin mount alternates sides. The TreaskaAr blaster cycles four
+   * barrels and that rhythm is most of why its fire reads as a machine rather
+   * than a colour. The offset is small — centimetres — but the tracer starting
+   * somewhere new each time is what the eye picks up.
+   */
   muzzleWorld(out = new THREE.Vector3()): THREE.Vector3 {
-    return this.flash.getWorldPosition(out);
+    this.flash.getWorldPosition(out);
+    const barrels = this.kit?.getObjectByName("spin") ? 6 : 2;
+    const r = barrels === 6 ? 0.035 : 0.03;
+    const a = (this.shotIdx % barrels) * ((Math.PI * 2) / barrels) + (barrels === 6 ? this.spinPhase : 0);
+    const right = new THREE.Vector3().setFromMatrixColumn(this.camera.matrixWorld, 0);
+    const up = new THREE.Vector3().setFromMatrixColumn(this.camera.matrixWorld, 1);
+    return out.addScaledVector(right, Math.cos(a) * r).addScaledVector(up, Math.sin(a) * r);
   }
+  private shotIdx = 0;
+  private spinPhase = 0;
 
   /** Camera kick in degrees {pitch, yaw} to be applied by the scene this frame. */
   cameraKick(): { pitch: number; yaw: number } {
@@ -403,7 +420,10 @@ export class Viewmodel {
       const slide = this.kit.getObjectByName("slide");
       if (slide) slide.position.z = this.slideT * 0.05;
       const spin = this.kit.getObjectByName("spin");
-      if (spin) spin.rotation.z += this.spinV * dt;
+      if (spin) {
+        spin.rotation.z += this.spinV * dt;
+        this.spinPhase = spin.rotation.z;
+      }
     }
     const b = this.back.step(dt);
     const pk = this.pitch.step(dt);

@@ -19,6 +19,11 @@ export interface Orientation {
   beta: number;
   gamma: number;
   absolute: boolean;
+  /**
+   * The compass heading before any smoothing. The AR camera uses it only as a
+   * slow calibration of where north is; motion comes from the raw quaternion.
+   */
+  headingRaw: number;
 }
 
 type IOSOrientation = typeof DeviceOrientationEvent & { requestPermission?: () => Promise<"granted" | "denied"> };
@@ -32,7 +37,7 @@ type IOSMotion = typeof DeviceMotionEvent & { requestPermission?: () => Promise<
  */
 export class Sensors {
   fix: GeoFix | null = null;
-  orient: Orientation = { heading: 0, pitch: 0, roll: 0, alpha: 0, beta: 0, gamma: 0, absolute: false };
+  orient: Orientation = { heading: 0, pitch: 0, roll: 0, alpha: 0, beta: 0, gamma: 0, absolute: false, headingRaw: 0 };
   hasCompass = false;
   private headingF = new HeadingFilter(0.35);
   private pitchF = new LowPass(0.3);
@@ -140,6 +145,7 @@ export class Sensors {
         beta,
         gamma,
         absolute,
+        headingRaw: heading,
       };
       this.emit();
     };
