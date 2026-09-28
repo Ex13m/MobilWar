@@ -33,9 +33,6 @@ type PlaceKind = Extract<ObjectKind, "turret" | "barrier" | "drone" | "medkit">;
  * Game session controller: joins the room, streams position, renders AR or the
  * screenless UI, handles fire/place, and turns server events into feedback.
  */
-/** How far off the aim line a target may be for the tracer to bend onto it. */
-const VISUAL_SNAP_DEG = 6;
-
 export class Game {
   private world = new WorldState();
   private hud: Hud | null = null;
@@ -312,6 +309,8 @@ export class Game {
     const { heading, pitch } = this.aim();
     const sdef = weaponById(this.o.profile.loadout[w]);
     this.o.audio.shot(w, sdef?.pitch, this.o.profile.loadout[w], sdef?.cooldownMs);
+    // One rule for the whole trigger: what the crosshair is on is what the
+    // round is sent at and what the tracer is drawn to.
     const claim = this.crosshairTarget();
     this.net.send({ type: "shoot", weapon: w, heading, pitch, ct: now, chargeMs: Math.round(chargeMs), zoomed: this.zoomed, aimId: claim?.id, aimErrDeg: claim?.errDeg });
     if (this.scene) {
@@ -321,7 +320,12 @@ export class Game {
       if (w !== "rocket" || (def && def.pellets > 1)) {
         // Immediate local bolt(s) from the muzzle; the server decides the hit.
         const from = this.zoomed ? undefined : this.scene.muzzleInWorld();
-        const hot = this.aimTarget();
+        // Aim at the avatar as drawn, not at the GPS position the server keeps.
+        // Bending the tracer onto the latter is what made one weapon fly
+        // straight and the next one sideways: whether it bent at all depended
+        // on that weapon's cone against GPS noise.
+        const claimed = claim ? this.world.players.get(claim.id) : undefined;
+        const hot = claimed ? { x: claimed.rx, z: claimed.rz } : null;
         const color = def?.color ?? WEAPON_PRESETS[w].boltColor;
         const n = def ? Math.max(1, def.pellets) : 1;
         for (let i = 0; i < n; i++) {
@@ -395,30 +399,6 @@ export class Game {
     return { heading: this.o.sensors.orient.heading, pitch: this.o.sensors.orient.pitch };
   }
 
-  private aimTarget(): { id: string; x: number; z: number } | null {
-    const w = this.weapon;
-    const me = this.world.myPlayer();
-    // Pointing at the sky or at your feet is a miss, so the local tracer must
-    // not snap onto a target the vertical aim has already ruled out.
-    const a = this.aim();
-    if (Math.abs(a.pitch) > GAME.VERT_HALF_ANGLE_DEG) return null;
-    const hot = resolveShot(
-      { x: this.world.me.x, z: this.world.me.z, acc: this.world.me.acc },
-      a.heading,
-      this.world.enemies().map((e) => ({ id: e.id, x: e.rx, z: e.rz, acc: e.acc })),
-      GAME.WEAPONS[w].RANGE_M,
-      (d) => weaponCone(w, d, me?.bloom ?? 0, this.zoomed),
-    );
-    if (!hot) return null;
-    // The hit cone is as wide as GPS forces it to be — up to 20° at close
-    // range. Bending the tracer onto anybody inside it makes the round visibly
-    // fly away from the crosshair. The visual snap keeps a tight cone; wider
-    // than that the round is drawn where it was aimed, and the hit still lands
-    // (the server's own shot event puts the spark on the victim).
-    if (hot.angErr > VISUAL_SNAP_DEG) return null;
-    const p = this.world.players.get(hot.id);
-    return p ? { id: p.id, x: p.rx, z: p.rz } : null;
-  }
 
   private place(kind: PlaceKind): void {
     this.net.send({ type: "place", kind });
@@ -751,7 +731,8 @@ export class Game {
         }
       }
       this.hud.setCompass(heading);
-      this.hud.setCrosshairHot(!!this.aimTarget());
+      // the crosshair lights up on whoever it is actually on, by the same rule the shot uses
+      this.hud.setCrosshairHot(!!this.crosshairTarget());
       this.hud.drawRadar(this.world, heading);
       if (!this.world.me.alive && room && me) {
         const base = room.bases[me.team];
