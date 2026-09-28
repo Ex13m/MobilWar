@@ -218,7 +218,7 @@ h2 { font-size: 18px; margin: 0 0 8px; }
 .hud .crosshair.locked .lock { opacity: .95; transform: scale(1); animation: lockpulse .9s ease-in-out infinite; }
 @keyframes lockpulse { 50% { opacity: .5; } }
 
-/* --- swipe-to-fire layer --------------------------------------------------- */
+/* --- touch-the-screen trigger layer --------------------------------------------------- */
 /* Sits above the camera and below every control, so a flick over empty screen
    fires while taps on the HUD still reach their buttons. */
 .hud .swipe { position: absolute; inset: 0; z-index: 1; touch-action: none; }
@@ -270,3 +270,6 @@ h2 { font-size: 18px; margin: 0 0 8px; }
 .bigcode { display: flex; align-items: baseline; gap: 12px; margin: 10px 0; padding: 12px 16px; border: 1px solid var(--line, #262626); border-radius: 14px; }
 .bigcode span { font-size: 12px; letter-spacing: .12em; color: var(--muted); }
 .bigcode b { font-size: 34px; letter-spacing: .18em; font-family: "IBM Plex Mono", ui-monospace, monospace; }
+
+/* Messages sit over the view but must never swallow a tap on the trigger. */
+.hud .banner, .hud .feed, .hud .streak, .hud .compass, .hud .dmgdir, .hud .vignette { pointer-events: none; }

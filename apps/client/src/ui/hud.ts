@@ -7,7 +7,6 @@ export interface HudCallbacks {
   onFireEnd(): void;
   onFireRocket(): void;
   /** Swipe up the screen to throw a charge; power is 0..1 from the flick length. */
-  onSwipeFire(power: number): void;
   /** Throw a grenade of the given kind. */
   onGrenade(kind: "plasma" | "emp"): void;
   onWeapon(w: WeaponId): void;
@@ -47,7 +46,7 @@ export class Hud {
         <div class="streak" hidden>серия <b>0</b></div>
         <div class="feed"></div>
         <div class="radar"><canvas width="192" height="192"></canvas></div>
-        <div class="swipe"><canvas class="trail"></canvas></div>
+        <div class="swipe"></div>
         <div class="crosshair"><i class="hm"></i><i class="charge"></i><i class="lock"></i></div>
         <div class="scope" hidden></div>
         <div class="reloadbar" hidden><i></i><span>перезарядка</span></div>
@@ -124,84 +123,41 @@ export class Hud {
       nade.classList.remove("emp");
     });
 
-    // --- swipe to fire ------------------------------------------------------
-    // A flick up the screen throws the charge downrange. The flick length sets
-    // the charge for weapons that have one, so a slow long drag is a heavy shot
-    // and a quick short one is a snap shot.
-    const swipe = this.q<HTMLElement>(".swipe");
-    const trail = this.q<HTMLCanvasElement>(".trail");
-    const tctx = trail.getContext("2d");
-    let sw: { x: number; y: number; t: number; pts: Array<{ x: number; y: number }> } | null = null;
-    const fitTrail = () => {
-      trail.width = swipe.clientWidth;
-      trail.height = swipe.clientHeight;
-    };
-    fitTrail();
-    window.addEventListener("resize", fitTrail);
-    const drawTrail = () => {
-      if (!tctx) return;
-      tctx.clearRect(0, 0, trail.width, trail.height);
-      if (!sw || sw.pts.length < 2) return;
-      tctx.lineCap = "round";
-      for (let pass = 0; pass < 2; pass++) {
-        tctx.beginPath();
-        tctx.moveTo(sw.pts[0]!.x, sw.pts[0]!.y);
-        for (const q of sw.pts.slice(1)) tctx.lineTo(q.x, q.y);
-        tctx.lineWidth = pass === 0 ? 14 : 4;
-        tctx.strokeStyle = pass === 0 ? "rgba(34,211,238,.18)" : "rgba(180,245,255,.9)";
-        tctx.stroke();
-      }
-    };
-    swipe.addEventListener("pointerdown", (e) => {
-      const r = swipe.getBoundingClientRect();
-      sw = { x: e.clientX - r.left, y: e.clientY - r.top, t: performance.now(), pts: [{ x: e.clientX - r.left, y: e.clientY - r.top }] };
-      swipe.setPointerCapture(e.pointerId);
-    });
-    swipe.addEventListener("pointermove", (e) => {
-      if (!sw) return;
-      const r = swipe.getBoundingClientRect();
-      sw.pts.push({ x: e.clientX - r.left, y: e.clientY - r.top });
-      if (sw.pts.length > 24) sw.pts.shift();
-      drawTrail();
-    });
-    const endSwipe = (e: PointerEvent) => {
-      if (!sw) return;
-      const r = swipe.getBoundingClientRect();
-      const dx = e.clientX - r.left - sw.x;
-      const dy = e.clientY - r.top - sw.y;
-      const ms = performance.now() - sw.t;
-      const len = Math.hypot(dx, dy);
-      sw = null;
-      drawTrail();
-      // Up the screen, far enough, and mostly vertical: anything else is a tap
-      // or a sideways drag and must not cost a round.
-      if (dy < -48 && len >= 56 && Math.abs(dy) > Math.abs(dx) && ms < 900) {
-        cb.onSwipeFire(Math.min(1, (len - 56) / 260));
-      }
-    };
-    swipe.addEventListener("pointerup", endSwipe);
-    swipe.addEventListener("pointercancel", () => {
-      sw = null;
-      drawTrail();
-    });
-
+    // --- fire by touching the screen ----------------------------------------
+    // As in TreaskaAr: the whole view is the trigger. Touch fires at once,
+    // holding keeps firing at the weapon's own rate (fire() enforces the
+    // cooldown, so the timer only has to be faster than the fastest gun), and
+    // for a charge weapon the hold is the charge. The button stays for players
+    // who prefer a thumb rest; both drive the same trigger.
+    const view = this.q<HTMLElement>(".swipe");
     const fire = this.q<HTMLButtonElement>(".fire");
     let holdTimer: number | null = null;
-    const startFire = (e: Event) => {
+    let holders = 0;
+    const startFire = (e: PointerEvent) => {
       e.preventDefault();
+      try {
+        (e.currentTarget as HTMLElement).setPointerCapture?.(e.pointerId);
+      } catch {
+        /* synthetic or already-released pointer: firing must not depend on capture */
+      }
+      holders++;
+      if (holders > 1) return;
       cb.onFire();
-      if (holdTimer) clearInterval(holdTimer);
-      holdTimer = window.setInterval(() => cb.onFire(), 120);
+      holdTimer = window.setInterval(() => cb.onFire(), 45);
     };
     const stopFire = () => {
+      if (holders === 0) return;
+      holders = Math.max(0, holders - 1);
+      if (holders > 0) return;
       if (holdTimer) clearInterval(holdTimer);
       holdTimer = null;
       cb.onFireEnd();
     };
-    fire.addEventListener("pointerdown", startFire);
-    fire.addEventListener("pointerup", stopFire);
-    fire.addEventListener("pointercancel", stopFire);
-    fire.addEventListener("pointerleave", stopFire);
+    for (const el of [view, fire]) {
+      el.addEventListener("pointerdown", startFire);
+      el.addEventListener("pointerup", stopFire);
+      el.addEventListener("pointercancel", stopFire);
+    }
     this.q(".fire2").addEventListener("pointerdown", (e) => {
       e.preventDefault();
       cb.onFireRocket();
