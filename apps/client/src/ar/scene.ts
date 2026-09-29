@@ -259,7 +259,13 @@ export class ArScene {
       this.yawCalInit = true;
     } else {
       const d = ((target - this.yawCal + 540) % 360) - 180;
-      this.yawCal += d * Math.min(1, this.lastDt * 0.9); // ~1 s to follow a compass correction
+      // A sudden jump of north is sensor noise (magnetic spike, gimbal on the
+      // iOS compass) until it has held for 1.5 s; only then follow it.
+      if (Math.abs(d) > 20 && this.calFarMs < 1500) this.calFarMs += this.lastDt * 1000;
+      else {
+        if (Math.abs(d) <= 20) this.calFarMs = 0;
+        this.yawCal += d * Math.min(1, this.lastDt * 0.9); // ~1 s to follow a compass correction
+      }
     }
     const yawQ = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), -this.yawCal * DEG);
     const raw = yawQ.multiply(this.tmpQ);
@@ -319,6 +325,7 @@ export class ArScene {
   // camera filter state (see updateView)
   private yawCal = 0;
   private yawCalInit = false;
+  private calFarMs = 0;
   private camPrevInit = false;
   private camPrevRaw = new THREE.Quaternion();
   private camDisp = new THREE.Quaternion();

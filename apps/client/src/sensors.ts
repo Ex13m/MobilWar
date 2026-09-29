@@ -122,20 +122,20 @@ export class Sensors {
       const gamma = e.gamma ?? 0;
       let heading: number;
       let absolute = false;
+      const cam = cameraAim(alpha, beta, gamma);
       if (typeof ev.webkitCompassHeading === "number" && !Number.isNaN(ev.webkitCompassHeading)) {
-        // iOS: compass heading of the top of the device (portrait). Convert to back-camera heading.
-        heading = ev.webkitCompassHeading;
+        // iOS: alpha is relative, webkitCompassHeading is the device heading
+        // (tilt-compensated by the OS), screen rotation still to be added.
+        heading = normalizeDeg(ev.webkitCompassHeading + this.screenAngle() + this.headingOffset);
         absolute = true;
       } else {
-        // Android absolute: alpha is rotation of device around Z from north, counter-clockwise.
-        heading = normalizeDeg(360 - alpha);
+        // Android absolute: alpha is from north, so the full rotation gives the
+        // back camera's true heading — gimbal-safe, independent of screen rotation.
+        heading = normalizeDeg(cam.heading + this.headingOffset);
         absolute = e.absolute === true || this.orientEventName === "deviceorientationabsolute";
       }
-      // When the phone is held upright (beta ~ 90), the camera points where the top edge points -> heading OK.
-      // Correct for screen rotation (landscape).
-      heading = normalizeDeg(heading + this.screenAngle() + this.headingOffset);
-      // Camera pitch: upright phone => beta 90 => pitch 0. Flat on table (beta 0) => camera points down => -90.
-      const pitch = beta - 90;
+      // Camera pitch from the full rotation (beta - 90 ignored roll).
+      const pitch = cam.pitch;
       this.hasCompass = absolute;
       this.orient = {
         heading: this.headingF.push(heading),
@@ -153,6 +153,34 @@ export class Sensors {
     this.orientEventName = "ondeviceorientationabsolute" in window ? "deviceorientationabsolute" : "deviceorientation";
     window.addEventListener(this.orientEventName, handler as EventListener, { passive: true });
   }
+}
+
+/**
+ * Compass heading and pitch of the back camera, from the full device rotation
+ * (W3C DeviceOrientation spec, "compass heading" example, plus the up component).
+ *
+ * `360 - alpha` is only the heading while the phone lies flat. Held upright
+ * (beta ≈ 90°) — exactly how you aim at the horizon — the Z-X'-Y'' angles hit
+ * gimbal lock: alpha and gamma trade off wildly for a hair of wrist roll while
+ * the camera does not move at all. That garbage used to feed the north
+ * calibration, so level shots wandered and a slight upward tilt "fixed" it.
+ * The camera direction itself has no such singularity (only straight up/down).
+ */
+export function cameraAim(alpha: number, beta: number, gamma: number): { heading: number; pitch: number } {
+  const D = Math.PI / 180;
+  const cX = Math.cos(beta * D);
+  const sX = Math.sin(beta * D);
+  const cY = Math.cos(gamma * D);
+  const sY = Math.sin(gamma * D);
+  const cZ = Math.cos(alpha * D);
+  const sZ = Math.sin(alpha * D);
+  const vx = -cZ * sY - sZ * sX * cY; // east
+  const vy = -sZ * sY + cZ * sX * cY; // north
+  const vz = -cX * cY; // up
+  return {
+    heading: normalizeDeg(Math.atan2(vx, vy) / D),
+    pitch: Math.asin(Math.max(-1, Math.min(1, vz))) / D,
+  };
 }
 
 export function isSecure(): boolean {
