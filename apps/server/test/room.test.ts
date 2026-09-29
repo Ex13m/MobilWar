@@ -1098,6 +1098,29 @@ describe("practice bots", () => {
     expect(fired).toBe(true);
   });
 
+  it("bot hits barely scratch a human, and a downed bot is replaced by a fresh one", () => {
+    const { room, pa, run } = solo();
+    room.setBots(2);
+    run(GAME.AUTOSTART_DELAY_MS + 10_500);
+    expect(room.phase).toBe("playing");
+    const enemy = [...room.players.values()].find((p) => p.bot && p.team !== pa.team)!;
+    pa.protectedUntil = 0;
+    const hp0 = pa.hp;
+    // Point-blank, dead-centre: a human rifle would take a big bite.
+    enemy.x = pa.x;
+    enemy.z = pa.z - 15;
+    (room as unknown as { damagePlayer: (v: Player, d: number, a: Player, w: string) => void }).damagePlayer(pa, 40, enemy, "blaster");
+    expect(hp0 - pa.hp).toBeLessThanOrEqual(2);
+    // Kill the enemy bot: it must vanish and a new enemy bot must take its place.
+    (room as unknown as { damagePlayer: (v: Player, d: number, a: Player | null, w: string) => void }).damagePlayer(enemy, 999, pa, "blaster");
+    expect(enemy.alive).toBe(false);
+    run(GAME.BOTS.REPLACE_MS + 300);
+    expect(room.players.has(enemy.id)).toBe(false);
+    const bots = [...room.players.values()].filter((p) => p.bot);
+    expect(bots).toHaveLength(2);
+    expect(bots.filter((b) => b.team !== pa.team && b.alive)).toHaveLength(2);
+  });
+
   it("bots leave with the last human so the room can expire", () => {
     const { room } = solo();
     room.setBots(3);

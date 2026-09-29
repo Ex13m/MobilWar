@@ -221,7 +221,7 @@ export const GAME = {
    */
   AUTOSTART_PLAYERS: 2,
   /** Practice bots: at most this many per room, walking pace, reaction and aim spread. */
-  BOTS: { MAX: 4, SPEED_MPS: 1.6, RANGE_M: 38, KEEP_M: 14, AIM_SPREAD_DEG: 9, MISS_CHANCE: 0.45, FIRE_MIN_MS: 1300, FIRE_MAX_MS: 2800, BURST: 3 },
+  BOTS: { MAX: 4, SPEED_MPS: 1.6, RANGE_M: 38, KEEP_M: 14, AIM_SPREAD_DEG: 9, MISS_CHANCE: 0.45, DAMAGE_MULT: 0.05, REPLACE_MS: 2000, FIRE_MIN_MS: 1300, FIRE_MAX_MS: 2800, BURST: 3 },
   /** Grace period before the automatic countdown begins, ms. */
   AUTOSTART_DELAY_MS: 5000,
   /**

@@ -582,7 +582,8 @@ export class Game {
     switch (kind) {
       case "bots": {
         const n = Number(data?.count ?? 0);
-        this.hud?.feed(n ? `Боты в игре: ${n}` : "Боты убраны");
+        if (data?.spawned) this.hud?.feed(`Новый соперник: ${String(data.spawned)}`);
+        else this.hud?.feed(n ? `Боты в игре: ${n}` : "Боты убраны");
         return;
       }
       case "explosion": {

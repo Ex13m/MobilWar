@@ -54,6 +54,8 @@ interface BotBrain {
   burst: number;
   strafe: number;
   strafeUntil: number;
+  /** When the bot went down; a fresh one replaces it shortly after. */
+  diedAt: number;
 }
 
 export interface Client {
@@ -390,27 +392,54 @@ export class Room {
       this.bots.delete(id);
       this.leave(id);
     }
-    const NICKS = ["Бот Шарик", "Бот Барсик", "Бот Кузя", "Бот Жужа"];
     while (this.bots.size < want) {
-      const id = `bot-${++this.botSeq}`;
-      const nick = NICKS.find((k) => ![...this.players.values()].some((q) => q.nick === k)) ?? `Бот ${this.botSeq}`;
-      let p: Player;
-      try {
-        p = this.join({ id, send: () => {} }, { nick, avatar: "robot", playMode: "ar", deviceId: id });
-      } catch {
-        break; // room full
-      }
-      p.bot = true;
       // First two bots fight the humans, the next two join them: "2" is a duel
       // against a pair, "4" is two-on-two plus you.
       const human = [...this.players.values()].find((q) => !q.bot && !q.isReferee);
-      if (human) p.team = this.bots.size < 2 ? other(human.team) : human.team;
-      const base = this.bases()[p.team];
-      const a = this.rng() * Math.PI * 2;
-      this.botMove(p, base.x + Math.cos(a) * 4, base.z + Math.sin(a) * 4, this.now());
-      this.bots.set(id, { wp: this.botWaypoint(), nextShotAt: 0, burst: 0, strafe: this.rng() < 0.5 ? -1 : 1, strafeUntil: 0 });
+      const team = human ? (this.bots.size < 2 ? other(human.team) : human.team) : undefined;
+      if (!this.spawnBot(team)) break; // room full
     }
     return this.bots.size;
+  }
+
+  /** Add one bot. With `near`, it walks in 18–28 m from that point instead of from its base. */
+  private spawnBot(team?: Team, near?: { x: number; z: number }): Player | null {
+    const NICKS = ["Бот Шарик", "Бот Барсик", "Бот Кузя", "Бот Жужа", "Бот Тузик", "Бот Мурзик", "Бот Бобик", "Бот Пушок"];
+    const id = `bot-${++this.botSeq}`;
+    const taken = new Set([...this.players.values()].map((q) => q.nick));
+    const free = NICKS.filter((k) => !taken.has(k));
+    const nick = free.length ? free[Math.floor(this.rng() * free.length)]! : `Бот ${this.botSeq}`;
+    let p: Player;
+    try {
+      p = this.join({ id, send: () => {} }, { nick, avatar: "robot", playMode: "ar", deviceId: id });
+    } catch {
+      return null;
+    }
+    p.bot = true;
+    if (team) p.team = team;
+    const a = this.rng() * Math.PI * 2;
+    let x: number;
+    let z: number;
+    if (near) {
+      const r = 18 + this.rng() * 10;
+      x = near.x + Math.cos(a) * r;
+      z = near.z + Math.sin(a) * r;
+      const lim = this.radiusM * 0.85;
+      const d = Math.hypot(x, z);
+      if (d > lim) {
+        x *= lim / d;
+        z *= lim / d;
+      }
+    } else {
+      const base = this.bases()[p.team];
+      x = base.x + Math.cos(a) * 4;
+      z = base.z + Math.sin(a) * 4;
+    }
+    const t = this.now();
+    this.botMove(p, x, z, t);
+    if (this.phase === "playing") p.protectedUntil = t + GAME.SPAWN_PROTECT_MS;
+    this.bots.set(id, { wp: this.botWaypoint(), nextShotAt: t + 1500, burst: 0, strafe: this.rng() < 0.5 ? -1 : 1, strafeUntil: 0, diedAt: 0 });
+    return p;
   }
 
   botCount(): number {
@@ -447,11 +476,23 @@ export class Room {
         continue;
       }
       const playing = this.phase === "playing";
-      let goal = brain.wp;
-      let target: Player | null = null;
+      // A downed bot is swapped for a new one near the humans, so there is
+      // always someone to shoot at.
       if (playing && !p.alive) {
-        goal = this.bases()[p.team]; // walk home to respawn, like a real player
-      } else if (playing) {
+        if (!brain.diedAt) brain.diedAt = t;
+        if (t - brain.diedAt >= GAME.BOTS.REPLACE_MS) {
+          const team = p.team;
+          this.bots.delete(id);
+          this.leave(id);
+          const human = [...this.players.values()].find((q) => !q.bot && !q.isReferee && q.lastSample);
+          const fresh = this.spawnBot(team, human ? { x: human.x, z: human.z } : undefined);
+          if (fresh) this.broadcast({ type: "event", kind: "bots", data: { count: this.bots.size, spawned: fresh.nick } });
+        }
+        continue;
+      }
+      const goal = brain.wp;
+      let target: Player | null = null;
+      if (playing) {
         let best: number = B.RANGE_M;
         for (const q of this.players.values()) {
           if (q.id === p.id || !q.alive || q.isReferee || !q.lastSample || !this.isEnemy(p, q)) continue;
@@ -479,7 +520,7 @@ export class Room {
       } else {
         const d = distLocal(p, goal);
         if (d < 2) {
-          if (p.alive || !playing) brain.wp = this.botWaypoint();
+          brain.wp = this.botWaypoint();
         } else {
           vx = (goal.x - p.x) / d;
           vz = (goal.z - p.z) / d;
@@ -1947,6 +1988,8 @@ export class Room {
 
   private damagePlayer(victim: Player, dmg: number, attacker: Player | null, weapon: KillWeapon, pierce = false): void {
     if (!victim.alive) return;
+    // Practice bots only tickle humans: the hit registers, the bar barely moves.
+    if (attacker?.bot && !victim.bot) dmg = Math.max(1, Math.round(dmg * GAME.BOTS.DAMAGE_MULT));
     if (victim.shield > 0 && !pierce) {
       const absorbed = Math.min(victim.shield, dmg);
       victim.shield -= absorbed;
