@@ -273,3 +273,26 @@ h2 { font-size: 18px; margin: 0 0 8px; }
 
 /* Messages sit over the view but must never swallow a tap on the trigger. */
 .hud .banner, .hud .feed, .hud .streak, .hud .compass, .hud .dmgdir, .hud .vignette { pointer-events: none; }
+
+/* Landscape phone: the bottom stack must not eat half the view. Vitals and
+   weapons shrink into the left 55%, fire buttons stay on the right edge. */
+@media (orientation: landscape) and (max-height: 520px) {
+  .hud .bottom { right: auto; width: min(56vw, 520px); left: max(12px, env(safe-area-inset-left)); gap: 8px; }
+  .hud .vitals { gap: 3px; }
+  .hud .hpnum { font-size: 22px; }
+  .hud .hpbar { height: 9px; gap: 2px; }
+  .hud .shieldbar { height: 4px; }
+  .hud .weapons { margin-top: 2px; gap: 4px; }
+  .hud .wbtn { min-height: 34px; padding: 3px 6px; border-radius: 10px; }
+  .hud .wbtn b { font-size: 12px; }
+  .hud .wbtn small { font-size: 11px; }
+  .hud .radar { top: 56px; width: 80px; height: 80px; }
+  .hud .place-menu { bottom: 110px; }
+  .hud .wpick, .hud .reload, .hud .zoom { min-height: 32px; }
+  .hud .place { width: 36px; height: 36px; font-size: 15px; }
+  .hud .wprev, .hud .wnext { font-size: 18px; }
+  .hud .firecol { position: fixed; right: max(12px, env(safe-area-inset-right)); bottom: max(10px, env(safe-area-inset-bottom)); flex-direction: row-reverse; align-items: flex-end; gap: 10px; }
+  .hud .fire { width: 76px; height: 76px; }
+  .hud .fire2 { width: 52px; height: 52px; font-size: 20px; }
+  .hud .nade { width: 48px; height: 48px; font-size: 19px; }
+}

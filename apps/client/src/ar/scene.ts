@@ -253,18 +253,32 @@ export class ArScene {
     // says where north is, which drifts slowly. The old code corrected yaw to
     // the *filtered* compass every frame, so the crosshair trailed every turn
     // by the filter's lag and swam with its noise at rest.
+    //
+    // The motion stream is the relative gyro one (as in TreaskaAr), whose zero
+    // is arbitrary, so north is an offset learnt from the compass. It is learnt
+    // slowly and only while the phone is nearly still and looking roughly at
+    // the horizon: compass samples arrive on their own clock and lag during a
+    // swing, and straight up/down the camera has no heading at all.
+    if (o.frame !== this.calFrame) {
+      this.calFrame = o.frame; // the motion stream changed: its zero changed too
+      this.yawCalInit = false;
+    }
     const target = ((o.headingRaw - yawNow + 540) % 360) - 180;
+    const pitchNow = Math.asin(Math.max(-1, Math.min(1, this.fwd.y))) / DEG;
+    const fresh = o.compassAt > 0 && performance.now() - o.compassAt < 1500;
     if (!this.yawCalInit) {
       this.yawCal = target;
-      this.yawCalInit = true;
-    } else {
+      this.yawCalInit = fresh; // snap to the first compass reading, then only nudge
+    } else if (fresh && Math.abs(pitchNow) < 55) {
       const d = ((target - this.yawCal + 540) % 360) - 180;
-      // A sudden jump of north is sensor noise (magnetic spike, gimbal on the
-      // iOS compass) until it has held for 1.5 s; only then follow it.
-      if (Math.abs(d) > 20 && this.calFarMs < 1500) this.calFarMs += this.lastDt * 1000;
+      const rate = this.camRate; // rad/s, from the previous frame
+      const still = Math.max(0, Math.min(1, 1 - rate / 0.6));
+      // A sudden jump of north is noise (magnetic spike, iOS compass settling)
+      // until it has held for 1.5 s; only then follow it.
+      if (Math.abs(d) > 20 && this.calFarMs < 1500) this.calFarMs += this.lastDt * 1000 * still;
       else {
         if (Math.abs(d) <= 20) this.calFarMs = 0;
-        this.yawCal += d * Math.min(1, this.lastDt * 0.9); // ~1 s to follow a compass correction
+        this.yawCal += d * Math.min(1, this.lastDt * 0.35 * still); // ~3 s at rest, frozen mid-swing
       }
     }
     const yawQ = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), -this.yawCal * DEG);
@@ -278,6 +292,7 @@ export class ArScene {
       this.qDelta.copy(raw).multiply(this.qInv);
       this.camPrevRaw.copy(raw);
       const ang = 2 * Math.acos(Math.min(1, Math.abs(this.qDelta.w)));
+      this.camRate = this.camRate * 0.8 + (ang / Math.max(0.005, this.lastDt)) * 0.2;
       const predK = ang < 0.4 ? 0.22 * Math.max(0, Math.min(1, (ang - 0.006) / 0.03)) : 0;
       if (predK > 0.001) raw.premultiply(this.qPred.identity().slerp(this.qDelta, predK));
       const smK = 0.4 * (1 - Math.max(0, Math.min(1, (ang - 0.0015) / 0.011)));
@@ -326,6 +341,9 @@ export class ArScene {
   private yawCal = 0;
   private yawCalInit = false;
   private calFarMs = 0;
+  private calFrame = -1;
+  /** Smoothed camera angular speed, rad/s. */
+  private camRate = 0;
   private camPrevInit = false;
   private camPrevRaw = new THREE.Quaternion();
   private camDisp = new THREE.Quaternion();
