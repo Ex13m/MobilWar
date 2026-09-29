@@ -266,10 +266,23 @@ export class Game {
     this.o.audio.weaponSwitch();
   }
 
-  /** Fire button pressed: sniper starts charging, everything else fires. */
+  /** Scope that the trigger itself raised, to be lowered after the shot. */
+  private autoZoom = false;
+
+  /**
+   * Trigger pressed. The sniper works like a real scope: press brings the
+   * scope up and starts the charge, release takes the shot. Everything else
+   * fires on the press.
+   */
   private trigger(): void {
     if (this.weapon === "sniper") {
-      if (!this.chargeStart) this.chargeStart = performance.now();
+      if (!this.chargeStart) {
+        this.chargeStart = performance.now();
+        if (!this.zoomed) {
+          this.toggleZoom();
+          this.autoZoom = true;
+        }
+      }
       return;
     }
     this.fire(this.weapon);
@@ -282,6 +295,13 @@ export class Game {
     this.chargeStart = 0;
     this.hud?.setCharge(0);
     this.fire("sniper", held);
+    // hold the scope a moment so the shot is seen landing, then drop it
+    if (this.autoZoom) {
+      this.autoZoom = false;
+      window.setTimeout(() => {
+        if (this.zoomed && !this.chargeStart) this.toggleZoom();
+      }, 350);
+    }
   }
 
   private fire(w: WeaponId, chargeMs = 0): void {
