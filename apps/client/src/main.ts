@@ -38,6 +38,7 @@ async function boot(): Promise<void> {
       profile,
       roomId: res.roomId,
       pin: res.pin,
+      bots: res.bots,
       playMode: res.playMode,
       onExit: () => {
         /* loop continues to lobby */

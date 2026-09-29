@@ -15,6 +15,8 @@ export interface PlayerPublic {
   team: Team;
   avatar: AvatarId;
   playMode: PlayMode;
+  /** Server-driven practice opponent (test mode). */
+  bot?: boolean;
   /** Local ENU coords (m), relative to room origin. */
   x: number;
   z: number;
@@ -250,6 +252,12 @@ export interface RefereeCmdMsg {
   polygon?: LatLon[];
 }
 
+/** Test mode: set how many server-driven bots play in the room (0 removes them). */
+export interface BotsMsg {
+  type: "bots";
+  count: number;
+}
+
 export interface PingMsg {
   type: "ping";
   ct: number;
@@ -294,6 +302,7 @@ export type ClientMsg =
   | PlaceObjectMsg
   | RefereeCmdMsg
   | PingMsg
+  | BotsMsg
   | CreateRoomMsg
   | ListRoomsMsg;
 
@@ -372,6 +381,7 @@ export interface EventMsg {
     | "drone_rearmed"
     | "autostart"
     | "autostart_cancelled"
+    | "bots"
     | "pickup"
     | "pickup_spawned"
     | "pickup_soon"

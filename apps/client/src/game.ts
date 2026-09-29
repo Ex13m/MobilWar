@@ -24,6 +24,8 @@ export interface GameOptions {
   /** Entry pin of the zone, checked by the server on every join. */
   pin: string;
   playMode: PlayMode;
+  /** Practice bots to request once joined (test mode). */
+  bots?: number;
   onExit(): void;
 }
 
@@ -244,7 +246,7 @@ export class Game {
   private openMenu(): void {
     const root = this.o.root;
     if (root.querySelector(".drawer")) return;
-    root.insertAdjacentHTML("beforeend", `<div class="drawer"><div class="row"><button class="btn secondary" id="dr-close">← В бой</button><button class="btn danger" id="dr-exit">Выйти из зоны</button></div><div id="dr-loadout"></div></div>`);
+    root.insertAdjacentHTML("beforeend", `<div class="drawer"><div class="row"><button class="btn secondary" id="dr-close">← В бой</button><button class="btn danger" id="dr-exit">Выйти из зоны</button></div><div class="row"><span class="hint" style="white-space:nowrap">Боты:</span><button class="btn secondary" data-bots="0">0</button><button class="btn secondary" data-bots="1">1</button><button class="btn secondary" data-bots="2">2</button><button class="btn secondary" data-bots="4">4</button></div><div id="dr-loadout"></div></div>`);
     const drawer = root.querySelector<HTMLElement>(".drawer")!;
     const off = renderLoadout(drawer.querySelector("#dr-loadout")!, this.o.profile.loadout, (slot, id) => this.equip(slot, id));
     drawer.querySelector("#dr-close")!.addEventListener("click", () => {
@@ -252,6 +254,9 @@ export class Game {
       drawer.remove();
     });
     drawer.querySelector("#dr-exit")!.addEventListener("click", () => this.exit());
+    drawer.querySelectorAll<HTMLButtonElement>("[data-bots]").forEach((b) =>
+      b.addEventListener("click", () => this.net.send({ type: "bots", count: Number(b.dataset.bots) })),
+    );
   }
 
   private toggleZoom(): void {
@@ -428,6 +433,10 @@ export class Game {
         this.world.myId = m.playerId;
         this.joined = true;
         this.hud?.feed(`Зона ${m.room.name} · код ${m.room.id}`);
+        if (this.o.bots) {
+          this.net.send({ type: "bots", count: this.o.bots });
+          this.o.bots = 0; // once: a reconnect must not re-add them
+        }
         break;
       case "snapshot":
         this.world.applySnapshot(m.snap);
@@ -571,6 +580,11 @@ export class Game {
       return;
     }
     switch (kind) {
+      case "bots": {
+        const n = Number(data?.count ?? 0);
+        this.hud?.feed(n ? `Боты в игре: ${n}` : "Боты убраны");
+        return;
+      }
       case "explosion": {
         const x = Number(data?.x);
         const z = Number(data?.z);

@@ -1044,3 +1044,64 @@ describe("купол в снимке мира", () => {
     expect(seen.heading).toBe(45);
   });
 });
+
+describe("practice bots", () => {
+  function solo() {
+    let now = 1_000_000;
+    const room = new Room({ id: "B", name: "bots", mode: "tdm", origin, radiusM: 60 }, {}, () => now);
+    const a = mkClient("a");
+    const pa = room.join(a, { nick: "A", avatar: "scout", playMode: "ar", deviceId: "da", team: "red" });
+    room.updatePosition(pa, origin.lat, origin.lon, 5, 0);
+    const run = (ms: number) => {
+      for (let i = 0; i < ms / 100; i++) {
+        now += 100;
+        room.tick();
+      }
+    };
+    return { room, a, pa, run };
+  }
+
+  it("spawns bots with a position, flags them public and caps the count", () => {
+    const { room } = solo();
+    expect(room.setBots(2)).toBe(2);
+    const bots = [...room.players.values()].filter((p) => p.bot);
+    expect(bots).toHaveLength(2);
+    for (const b of bots) expect(b.lastSample).not.toBeNull();
+    expect(room.snapshot().players.filter((p) => p.bot)).toHaveLength(2);
+    expect(bots.every((b) => b.team === "blue")).toBe(true); // the first two are the human's enemies
+    expect(room.setBots(99)).toBe(GAME.BOTS.MAX);
+    expect(room.setBots(0)).toBe(0);
+    expect([...room.players.values()].some((p) => p.bot)).toBe(false);
+  });
+
+  it("a solo tester plus bots autostarts, bots walk and fight back", () => {
+    const { room, pa, run } = solo();
+    room.setBots(2);
+    const start = [...room.players.values()].filter((p) => p.bot).map((b) => ({ id: b.id, x: b.x, z: b.z }));
+    run(GAME.AUTOSTART_DELAY_MS + 10_500);
+    expect(room.phase).toBe("playing");
+    const moved = start.some((s) => {
+      const b = room.players.get(s.id)!;
+      return Math.hypot(b.x - s.x, b.z - s.z) > 1;
+    });
+    expect(moved).toBe(true);
+    // Walk the human into the middle of the enemy bot and wait: it must shoot.
+    const enemy = [...room.players.values()].find((p) => p.bot && p.team !== pa.team)!;
+    let fired = false;
+    for (let i = 0; i < 100 && !fired; i++) {
+      const at = destination(origin, 0, 0);
+      const toward = { lat: at.lat + ((enemy.z > 0 ? -1 : 1) * (Math.abs(enemy.z) - 12)) / 111_320, lon: at.lon };
+      room.updatePosition(pa, toward.lat, toward.lon, 5, 0);
+      run(100);
+      fired = Object.values(enemy.lastShotByWeapon).some((v) => v > 0);
+    }
+    expect(fired).toBe(true);
+  });
+
+  it("bots leave with the last human so the room can expire", () => {
+    const { room } = solo();
+    room.setBots(3);
+    room.leave("a");
+    expect(room.players.size).toBe(0);
+  });
+});

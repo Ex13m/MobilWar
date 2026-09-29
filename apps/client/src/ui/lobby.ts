@@ -10,6 +10,8 @@ export interface LobbyResult {
   playMode: PlayMode;
   /** Entry pin of the zone; the server refuses a join without it. */
   pin: string;
+  /** Practice bots to add on entry (test mode). */
+  bots?: number;
 }
 
 const AVATAR_NAMES: Record<AvatarId, string> = {
@@ -78,6 +80,7 @@ export function showLobby(root: HTMLElement, profile: Profile, getFix: () => { l
           <input id="rradius" type="number" min="20" max="500" value="${GAME.DEFAULT_ZONE_RADIUS_M}" />
           <label class="row-check"><input id="rlisted" type="checkbox" /> Показывать зону в общем списке</label>
           <p class="hint">По умолчанию выключено: зона приватная, войти можно только по коду и пину. Включай, только если зовёшь незнакомых.</p>
+          <label class="row-check"><input id="rbots" type="checkbox" /> Тест: добавить 2 бота-соперника</label>
           <div style="height:12px"></div>
           <button class="btn secondary block" id="create">Создать и войти</button>
           <p class="hint" style="margin-top:8px">Судья: открой <b>/referee.html?room=КОД</b> на планшете.</p>
@@ -126,11 +129,11 @@ export function showLobby(root: HTMLElement, profile: Profile, getFix: () => { l
       return true;
     }
 
-    function go(roomId: string, pin: string): void {
+    function go(roomId: string, pin: string, bots = 0): void {
       profile.lastRoom = roomId;
       profile.lastPin = pin;
       saveProfile(profile);
-      resolve({ roomId, playMode: profile.playMode, pin });
+      resolve({ roomId, playMode: profile.playMode, pin, bots });
     }
 
     $("#join").addEventListener("click", () => {
@@ -163,7 +166,7 @@ export function showLobby(root: HTMLElement, profile: Profile, getFix: () => { l
         radiusM: Number($<HTMLInputElement>("#rradius").value) || GAME.DEFAULT_ZONE_RADIUS_M,
         listed: $<HTMLInputElement>("#rlisted").checked,
       })
-        .then((room) => showCode(room))
+        .then((room) => showCode(room, $<HTMLInputElement>("#rbots").checked ? 2 : 0))
         .catch((e: Error) => (err.textContent = `Не удалось создать зону: ${e.message}`));
     });
 
@@ -171,7 +174,7 @@ export function showLobby(root: HTMLElement, profile: Profile, getFix: () => { l
      * After creating a zone: show the code and the pin big, because these two
      * are what the child reads out to the others. Nothing starts until they tap.
      */
-    function showCode(room: { id: string; pin?: string; listed?: boolean }): void {
+    function showCode(room: { id: string; pin?: string; listed?: boolean }, bots = 0): void {
       const pin = room.pin ?? "";
       root.innerHTML = `<div class="screen hero art-start"><div class="card">
         <h2>Зона создана</h2>
@@ -181,7 +184,7 @@ export function showLobby(root: HTMLElement, profile: Profile, getFix: () => { l
         <p class="hint">${room.listed ? "Зона видна в общем списке." : "Зона приватная: её нет в списке, вход только по коду и пину."}</p>
         <button class="btn block" id="entergame">Войти в бой</button>
       </div></div>`;
-      root.querySelector("#entergame")!.addEventListener("click", () => go(room.id, pin));
+      root.querySelector("#entergame")!.addEventListener("click", () => go(room.id, pin, bots));
     }
 
     const roomsEl = $("#rooms");

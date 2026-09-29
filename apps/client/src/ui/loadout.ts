@@ -40,7 +40,12 @@ export function renderLoadout(root: HTMLElement, loadout: Loadout, onChange: (sl
   };
   root.addEventListener("click", handler);
   // scroll each row to its active card
-  root.querySelectorAll<HTMLElement>(".lo-card.active").forEach((c) => c.scrollIntoView({ block: "nearest", inline: "center" }));
+  // Centre the equipped card in its own strip only: scrollIntoView would also
+  // scroll the drawer and hide its top row (back / exit / bots) off screen.
+  root.querySelectorAll<HTMLElement>(".lo-card.active").forEach((c) => {
+    const strip = c.parentElement;
+    if (strip) strip.scrollLeft = c.offsetLeft - strip.offsetLeft - (strip.clientWidth - c.offsetWidth) / 2;
+  });
   return () => root.removeEventListener("click", handler);
 }
 

@@ -240,6 +240,14 @@ export class Room extends DurableObject<Env> {
         }
         return;
       }
+      case "bots": {
+        const p = game.players.get(conn.id);
+        if (!p || !game) return;
+        const n = game.setBots(msg.count);
+        game.broadcast({ type: "event", kind: "bots", data: { count: n, by: p.nick } });
+        game.broadcast({ type: "snapshot", snap: game.snapshot() });
+        return;
+      }
       case "weapon": {
         const p = game.players.get(conn.id);
         if (p) game.selectWeapon(p, msg.weapon);

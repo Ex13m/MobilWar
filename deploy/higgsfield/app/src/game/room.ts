@@ -48,6 +48,14 @@ import {
   type WorldObject,
 } from "../shared/index";
 
+interface BotBrain {
+  wp: { x: number; z: number };
+  nextShotAt: number;
+  burst: number;
+  strafe: number;
+  strafeUntil: number;
+}
+
 export interface Client {
   id: string;
   send(msg: ServerMsg): void;
@@ -202,6 +210,10 @@ export class Room {
   private itemPoints: Array<{ kind: PickupKind; x: number; z: number; nextAt: number; objId: string | null; warned: boolean }> = [];
   private lastTickAt = 0;
   private rng = mulberry32(Date.now() & 0xffffffff);
+  /** Practice bots (test mode): per-bot brain state, keyed by player id. */
+  private bots = new Map<string, BotBrain>();
+  private botSeq = 0;
+  private botTickAt = 0;
   /** Four-digit entry pin, generated with the room; the way a stranger is kept out. */
   readonly pin: string;
   /** Whether the zone is advertised in the public list. Private by default. */
@@ -359,6 +371,171 @@ export class Room {
     if (p.hasFlag) this.dropFlag(p);
     this.players.delete(clientId);
     this.lastActiveAt = this.now();
+    // Bots never keep a room alive on their own.
+    if (!p.bot && ![...this.players.values()].some((q) => !q.bot)) this.setBots(0);
+  }
+
+  /* ---------------- practice bots ---------------- */
+
+  /**
+   * Test mode: keep exactly `n` server-driven opponents in the room. They walk,
+   * aim with a human-sized spread, fire short bursts and walk back to base after
+   * dying, so one tester with one phone has someone to fight.
+   */
+  setBots(n: number): number {
+    const want = Math.max(0, Math.min(GAME.BOTS.MAX, Math.floor(Number(n) || 0)));
+    const ids = [...this.bots.keys()];
+    while (ids.length > want) {
+      const id = ids.pop()!;
+      this.bots.delete(id);
+      this.leave(id);
+    }
+    const NICKS = ["Бот Шарик", "Бот Барсик", "Бот Кузя", "Бот Жужа"];
+    while (this.bots.size < want) {
+      const id = `bot-${++this.botSeq}`;
+      const nick = NICKS.find((k) => ![...this.players.values()].some((q) => q.nick === k)) ?? `Бот ${this.botSeq}`;
+      let p: Player;
+      try {
+        p = this.join({ id, send: () => {} }, { nick, avatar: "robot", playMode: "ar", deviceId: id });
+      } catch {
+        break; // room full
+      }
+      p.bot = true;
+      // First two bots fight the humans, the next two join them: "2" is a duel
+      // against a pair, "4" is two-on-two plus you.
+      const human = [...this.players.values()].find((q) => !q.bot && !q.isReferee);
+      if (human) p.team = this.bots.size < 2 ? other(human.team) : human.team;
+      const base = this.bases()[p.team];
+      const a = this.rng() * Math.PI * 2;
+      this.botMove(p, base.x + Math.cos(a) * 4, base.z + Math.sin(a) * 4, this.now());
+      this.bots.set(id, { wp: this.botWaypoint(), nextShotAt: 0, burst: 0, strafe: this.rng() < 0.5 ? -1 : 1, strafeUntil: 0 });
+    }
+    return this.bots.size;
+  }
+
+  botCount(): number {
+    return this.bots.size;
+  }
+
+  private botWaypoint(): { x: number; z: number } {
+    const a = this.rng() * Math.PI * 2;
+    const r = Math.sqrt(this.rng()) * this.radiusM * 0.6;
+    return { x: Math.cos(a) * r, z: Math.sin(a) * r };
+  }
+
+  /** Put a bot at local (x, z) as if its phone had reported a clean 4 m GPS fix. */
+  private botMove(p: Player, x: number, z: number, t: number): void {
+    const ll = fromLocal(this.origin, { x, z });
+    p.lastSample = { lat: ll.lat, lon: ll.lon, acc: 4, t };
+    p.x = x;
+    p.z = z;
+    p.acc = 4;
+    p.t = t;
+    p.history.push({ t, x, z });
+    while (p.history.length > 2 && p.history[0]!.t < t - 2000) p.history.shift();
+  }
+
+  private tickBots(t: number): void {
+    if (!this.bots.size) return;
+    const B = GAME.BOTS;
+    const dt = Math.min(0.5, (t - (this.botTickAt || t)) / 1000) || 1 / GAME.TICK_HZ;
+    this.botTickAt = t;
+    for (const [id, brain] of this.bots) {
+      const p = this.players.get(id);
+      if (!p) {
+        this.bots.delete(id);
+        continue;
+      }
+      const playing = this.phase === "playing";
+      let goal = brain.wp;
+      let target: Player | null = null;
+      if (playing && !p.alive) {
+        goal = this.bases()[p.team]; // walk home to respawn, like a real player
+      } else if (playing) {
+        let best: number = B.RANGE_M;
+        for (const q of this.players.values()) {
+          if (q.id === p.id || !q.alive || q.isReferee || !q.lastSample || !this.isEnemy(p, q)) continue;
+          const d = distLocal(p, q);
+          if (d < best) {
+            best = d;
+            target = q;
+          }
+        }
+      }
+      // Movement: wander between waypoints; with a target, circle it at a sane distance.
+      let vx = 0;
+      let vz = 0;
+      if (target) {
+        const d = Math.max(0.1, distLocal(p, target));
+        const ux = (target.x - p.x) / d;
+        const uz = (target.z - p.z) / d;
+        if (t >= brain.strafeUntil) {
+          brain.strafe = this.rng() < 0.5 ? -1 : 1;
+          brain.strafeUntil = t + 1500 + this.rng() * 2500;
+        }
+        const radial = d > B.KEEP_M + 4 ? 0.7 : d < B.KEEP_M - 4 ? -0.7 : 0;
+        vx = ux * radial - uz * brain.strafe * 0.7;
+        vz = uz * radial + ux * brain.strafe * 0.7;
+      } else {
+        const d = distLocal(p, goal);
+        if (d < 2) {
+          if (p.alive || !playing) brain.wp = this.botWaypoint();
+        } else {
+          vx = (goal.x - p.x) / d;
+          vz = (goal.z - p.z) / d;
+        }
+      }
+      const len = Math.hypot(vx, vz);
+      let nx = p.x;
+      let nz = p.z;
+      if (len > 0.01) {
+        const step = (B.SPEED_MPS * dt) / len;
+        nx += vx * step;
+        nz += vz * step;
+        const lim = this.radiusM * 0.85;
+        const r = Math.hypot(nx, nz);
+        if (r > lim) {
+          nx *= lim / r;
+          nz *= lim / r;
+          brain.wp = this.botWaypoint();
+        }
+      }
+      this.botMove(p, nx, nz, t);
+      if (target) p.heading = bearingLocal(p, target);
+      else if (len > 0.01) p.heading = ((Math.atan2(vx, -vz) * 180) / Math.PI + 360) % 360;
+      if (!playing || !p.alive || !target) {
+        brain.burst = 0;
+        continue;
+      }
+      // Fire: short bursts with a human-sized aim error; never runs out of spare rounds.
+      if (p.reserve.blaster < 20) p.reserve.blaster = fullReserve(p.loadout).blaster;
+      if (p.reserve.pistol < 10) p.reserve.pistol = fullReserve(p.loadout).pistol;
+      const d = distLocal(p, target);
+      if (brain.burst <= 0 && t >= brain.nextShotAt) {
+        brain.burst = 1 + Math.floor(this.rng() * B.BURST);
+        // Now and then lob a grenade at a target in throwing range.
+        if (d > 8 && d < 26 && this.rng() < 0.12) {
+          const G = GAME.GRENADE;
+          const pitch = G.MIN_PITCH_DEG + (G.MAX_PITCH_DEG - G.MIN_PITCH_DEG) * Math.min(1, d / 26);
+          this.throwGrenade(p, "plasma", p.heading, pitch);
+        }
+      }
+      if (brain.burst > 0) {
+        const w: WeaponId = d < 10 ? "pistol" : "blaster";
+        // A fair share of rounds go clearly wide, so a child can outplay them.
+        const miss = this.rng() < B.MISS_CHANCE;
+        const err = miss ? (this.rng() < 0.5 ? -1 : 1) * (25 + this.rng() * 15) : (this.rng() * 2 - 1) * B.AIM_SPREAD_DEG;
+        const before = p.lastShotByWeapon[w];
+        this.shoot(p, p.heading + err, w, { pitch: 0 });
+        if (p.lastShotByWeapon[w] !== before) {
+          brain.burst--;
+          if (brain.burst <= 0) brain.nextShotAt = t + B.FIRE_MIN_MS + this.rng() * (B.FIRE_MAX_MS - B.FIRE_MIN_MS);
+        } else if (p.reloadUntil > t || p.mag[w] <= 0) {
+          brain.burst = 0;
+          brain.nextShotAt = Math.max(t + 400, p.reloadUntil);
+        }
+      }
+    }
   }
 
   private pickTeam(pref?: Team): Team {
@@ -1301,6 +1478,7 @@ export class Room {
   /** Advance the room by one tick. Returns true if a snapshot should be broadcast. */
   tick(): void {
     const t = this.now();
+    this.tickBots(t);
     // Nobody has to run the game. Once enough players are in the lobby and have
     // a position fix, the round counts itself down and starts.
     if (this.phase === "lobby") {
@@ -1840,6 +2018,7 @@ export function publicView(p: Player): PlayerPublic {
     team: p.team,
     avatar: p.avatar,
     playMode: p.playMode,
+    ...(p.bot ? { bot: true } : {}),
     x: p.x,
     z: p.z,
     heading: p.heading,

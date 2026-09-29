@@ -255,6 +255,14 @@ export function createApp(opts: { dbPath?: string } = {}) {
         }
         return;
       }
+      case "bots": {
+        const p = conn.room?.players.get(conn.id);
+        if (!p || !conn.room) return;
+        const n = conn.room.setBots(msg.count);
+        conn.room.broadcast({ type: "event", kind: "bots", data: { count: n, by: p.nick } });
+        conn.room.broadcast({ type: "snapshot", snap: conn.room.snapshot() });
+        return;
+      }
       case "weapon": {
         const p = conn.room?.players.get(conn.id);
         if (p && conn.room) conn.room.selectWeapon(p, msg.weapon);
